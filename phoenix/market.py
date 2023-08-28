@@ -68,6 +68,7 @@ class UiLadder:
 @dataclass
 class Market:
     metadata: MarketMetadata
+    sequence_number: int
     base_lots_per_base_unit: int
     quote_lots_per_base_unit_per_tick: int
     order_sequence_number: int
@@ -204,6 +205,7 @@ class Market:
 
         return cls(
             metadata=metadata,
+            sequence_number=header.market_sequence_number,
             base_lots_per_base_unit=base_lots_per_base_unit,
             quote_lots_per_base_unit_per_tick=quote_lots_per_base_unit_per_tick,
             order_sequence_number=sequence_number,
