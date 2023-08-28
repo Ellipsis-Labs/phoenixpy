@@ -10,6 +10,59 @@ from .types.fifo_order_id import FIFOOrderId
 from .types.fifo_resting_order import FIFORestingOrder
 from .types.trader_state import TraderState
 from dataclasses import dataclass
+from decimal import Decimal
+
+DEFAULT_L2_LADDER_DEPTH = 10
+
+
+class LadderLevel:
+    price_in_ticks: Decimal
+    size_in_base_lots: Decimal
+
+    def __init__(self, price_in_ticks, size_in_base_lots):
+        self.price_in_ticks = price_in_ticks
+        self.size_in_base_lots = size_in_base_lots
+
+
+class Ladder:
+    bids: List[LadderLevel]
+    asks: List[LadderLevel]
+
+    def __init__(self):
+        self.bids = []
+        self.asks = []
+
+
+class UiLadderLevel:
+    price: Decimal
+    size: Decimal
+
+    def __init__(self, price, size):
+        self.price = price
+        self.size = size
+
+    def __repr__(self) -> str:
+        return f"{self.price} {self.size}"
+
+
+class UiLadder:
+    bids: List[UiLadderLevel]
+    asks: List[UiLadderLevel]
+
+    def __init__(self):
+        self.bids = []
+        self.asks = []
+
+    def __repr__(self) -> str:
+        ladder_str = ""
+        for ask in reversed(self.asks):
+            ladder_str += repr(ask)
+            ladder_str += "\n"
+        ladder_str += "\n"
+        for bid in self.bids:
+            ladder_str += repr(bid)
+            ladder_str += "\n"
+        return ladder_str
 
 
 @dataclass
@@ -189,6 +242,98 @@ class Market:
                 self.asks[:levels],
             )
         )
+
+    def get_ladder(
+        self,
+        slot: int = -1,
+        unix_timestamp: int = -1,
+        levels: int = DEFAULT_L2_LADDER_DEPTH,
+    ) -> Ladder:
+        ladder = Ladder()
+
+        for order_id, resting_order in self.bids:
+            if (
+                resting_order.last_valid_slot != 0
+                and resting_order.last_valid_slot < slot
+            ):
+                continue
+            if (
+                resting_order.last_valid_unix_timestamp_in_seconds != 0
+                and resting_order.last_valid_unix_timestamp_in_seconds < unix_timestamp
+            ):
+                continue
+
+            price_in_ticks = Decimal(order_id.price_in_ticks)
+            size_in_base_lots = Decimal(resting_order.num_base_lots)
+            if not ladder.bids:
+                ladder.bids.append(LadderLevel(price_in_ticks, size_in_base_lots))
+            else:
+                prev = ladder.bids[-1]
+                if price_in_ticks == prev.price_in_ticks:
+                    prev.size_in_base_lots += size_in_base_lots
+                else:
+                    if len(ladder.bids) == levels:
+                        break
+                    ladder.bids.append(LadderLevel(price_in_ticks, size_in_base_lots))
+
+        for order_id, resting_order in self.asks:
+            if (
+                resting_order.last_valid_slot != 0
+                and resting_order.last_valid_slot < slot
+            ):
+                continue
+            if (
+                resting_order.last_valid_unix_timestamp_in_seconds != 0
+                and resting_order.last_valid_unix_timestamp_in_seconds < unix_timestamp
+            ):
+                continue
+
+            price_in_ticks = Decimal(order_id.price_in_ticks)
+            size_in_base_lots = Decimal(resting_order.num_base_lots)
+            if not ladder.asks:
+                ladder.asks.append(LadderLevel(price_in_ticks, size_in_base_lots))
+            else:
+                prev = ladder.asks[-1]
+                if price_in_ticks == prev.price_in_ticks:
+                    prev.size_in_base_lots += size_in_base_lots
+                else:
+                    if len(ladder.asks) == levels:
+                        break
+                    ladder.asks.append(LadderLevel(price_in_ticks, size_in_base_lots))
+
+        return ladder
+
+    def get_ui_ladder(
+        self,
+        slot: int = -1,
+        unix_timestamp: int = -1,
+        levels: int = DEFAULT_L2_LADDER_DEPTH,
+    ) -> UiLadder:
+        ui_ladder = UiLadder()
+        ladder = self.get_ladder(slot, unix_timestamp, levels)
+        for bid in ladder.bids:
+            ui_ladder.bids.append(
+                UiLadderLevel(
+                    Decimal(self.metadata.ticks_to_float_price(bid.price_in_ticks)),
+                    Decimal(
+                        self.metadata.base_lots_to_raw_base_units_as_float(
+                            bid.size_in_base_lots
+                        )
+                    ),
+                )
+            )
+        for ask in ladder.asks:
+            ui_ladder.asks.append(
+                UiLadderLevel(
+                    Decimal(self.metadata.ticks_to_float_price(ask.price_in_ticks)),
+                    Decimal(
+                        self.metadata.base_lots_to_raw_base_units_as_float(
+                            ask.size_in_base_lots
+                        )
+                    ),
+                )
+            )
+        return ui_ladder
 
 
 def deserialize_red_black_tree(

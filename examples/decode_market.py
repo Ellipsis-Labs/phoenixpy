@@ -16,8 +16,7 @@ async def main():
 
     market = Market.deserialize_market_data(market_bytes.value.data)
 
-    print("Bids", market.get_bids(5))
-    print("Asks", market.get_asks(5))
+    print(market.get_ui_ladder())
     await client.close()
 
 
