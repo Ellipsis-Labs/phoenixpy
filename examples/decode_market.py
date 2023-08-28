@@ -1,4 +1,3 @@
-from phoenix.types import MarketHeader, MARKET_HEADER_SIZE
 from phoenix.market import Market
 import asyncio
 from solana.rpc.async_api import AsyncClient
