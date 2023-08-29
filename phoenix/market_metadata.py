@@ -1,10 +1,23 @@
+from phoenix.instructions.place_limit_order import (
+    PlaceLimitOrderAccounts,
+    PlaceLimitOrderArgs,
+    place_limit_order,
+)
+from phoenix.program_id import PROGRAM_ID
+from phoenix.types.order_packet import Limit
 from .types.market_header import MarketHeader
+from solders.pubkey import Pubkey
+from spl.token.instructions import get_associated_token_address
+from solana.transaction import Instruction
 
 
 class MarketMetadata:
-    def __init__(self, header: MarketHeader):
+    def __init__(self, market_pubkey: Pubkey, header: MarketHeader):
+        self.address = market_pubkey
         self.base_mint = header.base_params.mint_key
+        self.base_vault = header.base_params.vault_key
         self.quote_mint = header.quote_params.mint_key
+        self.quote_vault = header.quote_params.vault_key
         self.base_decimals = header.base_params.decimals
         self.quote_decimals = header.quote_params.decimals
         self.base_atoms_per_raw_base_unit = 10**self.base_decimals
@@ -111,4 +124,39 @@ class MarketMetadata:
     def quote_units_per_raw_base_unit_per_tick(self):
         return self.tick_size_in_quote_atoms_per_base_unit / (
             self.quote_atoms_per_quote_unit * self.raw_base_units_per_base_unit
+        )
+
+    def create_place_limit_order_instruction(
+        self, limit_order_packet: Limit, trader_pubkey: Pubkey
+    ) -> Instruction:
+        # TODO: Refactor these into a separate helper function
+        log_account = Pubkey.find_program_address(["log".encode("utf-8")], PROGRAM_ID)[
+            0
+        ]
+        seat = Pubkey.find_program_address(
+            [
+                "seat".encode("utf-8"),
+                bytes(self.address),
+                bytes(trader_pubkey),
+            ],
+            PROGRAM_ID,
+        )[0]
+        base_account = get_associated_token_address(trader_pubkey, self.base_mint)
+        quote_account = get_associated_token_address(trader_pubkey, self.quote_mint)
+        accounts = PlaceLimitOrderAccounts(
+            phoenix_program=PROGRAM_ID,
+            log_authority=log_account,
+            market=self.address,
+            trader=trader_pubkey,
+            seat=seat,
+            base_account=base_account,
+            quote_account=quote_account,
+            base_vault=self.base_vault,
+            quote_vault=self.quote_vault,
+        )
+        place_limit_order_args = PlaceLimitOrderArgs(order_packet=limit_order_packet)
+
+        return place_limit_order(
+            place_limit_order_args,
+            accounts,
         )
