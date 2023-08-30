@@ -67,6 +67,7 @@ class UiLadder:
 
 @dataclass
 class Market:
+    address: Pubkey
     metadata: MarketMetadata
     sequence_number: int
     base_lots_per_base_unit: int
@@ -82,13 +83,13 @@ class Market:
     trader_index_to_trader_pubkey: Dict[int, Pubkey]
 
     @classmethod
-    def deserialize_market_data(cls, data: bytes) -> "Market":
+    def deserialize_market_data(cls, market_pubkey: Pubkey, data: bytes) -> "Market":
         # Deserialize the market header
 
         header = MarketHeader.from_decoded(
             MarketHeader.layout.parse(data[:MARKET_HEADER_SIZE])
         )
-        metadata = MarketMetadata(header)
+        metadata = MarketMetadata(market_pubkey, header)
         offset = MARKET_HEADER_SIZE
 
         # Parse market data
@@ -204,6 +205,7 @@ class Market:
             trader_index_to_trader_pubkey[index] = k
 
         return cls(
+            address=market_pubkey,
             metadata=metadata,
             sequence_number=header.market_sequence_number,
             base_lots_per_base_unit=base_lots_per_base_unit,

@@ -18,7 +18,9 @@ async def main():
         subscription_id = first_resp[0].result
         async for _, msg in enumerate(websocket):
             try:
-                market = Market.deserialize_market_data(msg[0].result.value.data)
+                market = Market.deserialize_market_data(
+                    solusdc_market_pubkey, msg[0].result.value.data
+                )
                 os.system("clear")
                 print(market.get_ui_ladder())
             except Exception as e:
