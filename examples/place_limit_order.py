@@ -12,10 +12,7 @@ async def main():
     keypair_path = "~/.config/solana/id.json"
     expanded_path = os.path.expanduser(keypair_path)
 
-    # client = PhoenixClient(endpoint="https://api.devnet.solana.com")
-    client = PhoenixClient(
-        endpoint="https://ellipsis-develope-cbc0.devnet.rpcpool.com/85e1e606-89fd-47a9-9a91-51ec4df1711a"
-    )
+    client = PhoenixClient(endpoint="https://api.devnet.solana.com")
     with open(expanded_path, "r") as file:
         byte_array = json.load(file)
 
@@ -31,18 +28,19 @@ async def main():
     solusdc_market_pubkey = Pubkey.from_string(
         "CS2H8nbAVVEUHWPF5extCSymqheQdkd4d7thik6eet9N"
     )
-
     await client.add_market(solusdc_market_pubkey)
-    market_metadata = client.markets[solusdc_market_pubkey]
 
     # TODO: Create method to get a seat on a market
 
-    limit_order_packet = client.get_limit_order_packet(Bid, 18, 0.01, market_metadata)
+    # Create order packets for the given market
+    limit_order_packet = client.get_limit_order_packet(
+        solusdc_market_pubkey, Bid, 18, 0.01
+    )
     limit_order_packet_two = client.get_limit_order_packet(
-        Bid, 19, 0.01, market_metadata
+        solusdc_market_pubkey, Bid, 19, 0.01
     )
 
-    # Execute returns a map of client_order_id to FIFOOrderId of orders that were executed
+    # Execute order packets; returns a map of client_order_id to FIFOOrderId of orders that were executed
     order_ids_map = await client.execute(
         [limit_order_packet, limit_order_packet_two], signer
     )

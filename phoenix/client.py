@@ -78,10 +78,10 @@ class PhoenixClient:
 
     def get_limit_order_packet(
         self,
+        market_pubkey: Pubkey,
         side: SideKind,
         price_in_quote_units: float,
         size_in_base_units: float,
-        market_metadata: MarketMetadata,
         client_order_id: int = None,
         self_trade_behavior: self_trade_behavior = self_trade_behavior.DecrementTake,
         match_limit: int = None,
@@ -90,10 +90,14 @@ class PhoenixClient:
         last_valid_unix_timestamp: int = None,
         fail_silently_on_insufficient_funds: bool = False,
     ) -> ExecutableOrder:
+        market_metadata: MarketMetadata = self.markets.get(market_pubkey, None)
+        if market_metadata == None:
+            raise ValueError("Market address not found: ", market_pubkey)
+
         if client_order_id is None:
             client_order_id = (
                 uuid4().int
-            )  # TODO: Replace with scheme to track orders from python client
+            )  # TODO: Replace with method to track orders from python client
         price_in_ticks = market_metadata.float_price_to_ticks_rounded_down(
             price_in_quote_units
         )
@@ -123,7 +127,7 @@ class PhoenixClient:
     ) -> Instruction:
         market_metadata: MarketMetadata = self.markets.get(market_pubkey, None)
         if market_metadata == None:
-            raise ValueError("Market not found for order: " + limit_order_packet)
+            raise ValueError("Market not found for order: ", limit_order_packet)
         return market_metadata.create_place_limit_order_instruction(
             limit_order_packet, trader_pubkey
         )
@@ -152,7 +156,6 @@ class PhoenixClient:
                 raise ValueError("Unimplemented order type")
 
         # Send transaction
-        commitment = commitment if commitment is not None else self.commitment
         response = await self.client.send_transaction(
             transaction,
             signer,
@@ -161,6 +164,8 @@ class PhoenixClient:
         signature = response.value
         await self.client.confirm_transaction(signature, commitment)
 
+        # Get transaction and parse for the FIFOOrderId of each order
+        commitment = commitment if commitment is not None else self.commitment
         transaction_response = await self.client.get_transaction(
             signature, "json", commitment
         )
