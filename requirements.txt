@@ -3,3 +3,4 @@ solders
 anchorpy
 borsh_construct
 uuid
+base58

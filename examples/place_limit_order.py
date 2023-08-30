@@ -41,9 +41,12 @@ async def main():
     limit_order_packet_two = client.get_limit_order_packet(
         Bid, 19, 0.01, market_metadata
     )
-    print(limit_order_packet, limit_order_packet_two)
 
-    await client.execute([limit_order_packet, limit_order_packet_two], signer)
+    # Execute returns a map of client_order_id to FIFOOrderId of orders that were executed
+    order_ids_map = await client.execute(
+        [limit_order_packet, limit_order_packet_two], signer
+    )
+    print("Order Id Map: ", order_ids_map)
 
     await client.close()
 

@@ -1,10 +1,12 @@
 import datetime
+from typing import TypedDict
 from uuid import uuid4
 from construct import Optional
 from phoenix.market_metadata import MarketMetadata
 from phoenix.types import self_trade_behavior
 from phoenix.types.order_packet import Limit, LimitValue, OrderPacketKind
 from phoenix.types.side import SideKind
+from phoenix.events import get_phoenix_events_from_confirmed_transaction_with_meta
 from solana.rpc.commitment import Commitment
 from solana.rpc.async_api import AsyncClient
 from solana.rpc.types import TxOpts
@@ -127,7 +129,7 @@ class PhoenixClient:
         )
 
     # TODO: Make cancel order parameter the correct type and add support
-    # TODO: Keep track of client order ids and return them when order is complete
+    # TODO: Add support for other order types
     async def execute(
         self,
         order_packets: [ExecutableOrder],
@@ -135,14 +137,16 @@ class PhoenixClient:
         cancel_orders: [int] = None,
         commitment=None,
     ):
-        # Create instructiosn for each order_packet
+        # Create instructions for each order_packet and create client_order_id map
         # Add instructions to transaction
         transaction = Transaction()
+        client_orders_map: TypedDict[int, FIFOOrderId] = {}
         for order in order_packets:
             if isinstance(order.order_packet, Limit):
                 limit_order_instruction = self.get_place_limit_order_instruction(
                     order.order_packet, order.market_pubkey, signer.pubkey()
                 )
+                client_orders_map[order.order_packet.value["client_order_id"]] = None
                 transaction.add(limit_order_instruction)
             else:
                 raise ValueError("Unimplemented order type")
@@ -154,34 +158,25 @@ class PhoenixClient:
             signer,
         )
 
-        # TODO: Get instruction parsing logic from GPT and use it to get the order_sequence_number
-        print(response)
-
         signature = response.value
         await self.client.confirm_transaction(signature, commitment)
 
-        # Note: The return data of the transaction is not currently working since it only returns it for the last instruction executed
-        # transaction = await self.client.get_transaction(signature, "json", commitment)
-        # returned_data = transaction.value.transaction.meta.return_data
-        # print(transaction.value.transaction.meta.return_data)
+        transaction_response = await self.client.get_transaction(
+            signature, "json", commitment
+        )
+        transaction = transaction_response.value
+        phoenix_transaction = get_phoenix_events_from_confirmed_transaction_with_meta(
+            transaction
+        )
 
-        # if returned_data is not None:
-        #     data = returned_data.data
+        for ix_events in phoenix_transaction.events_from_instructions:
+            for phoenix_event in ix_events.events:
+                if phoenix_event.kind == "Place":
+                    client_orders_map[
+                        phoenix_event.value[0].client_order_id
+                    ] = FIFOOrderId(
+                        phoenix_event.value[0].price_in_ticks,
+                        phoenix_event.value[0].order_sequence_number,
+                    )
 
-        #     # Parse the length prefix
-        #     num_orders_from_prefix = int.from_bytes(data[:4], byteorder="little")
-        #     data = data[4:]  # Remove the length prefix
-
-        #     # Just for safety, check that the calculated number of orders from data length matches the prefix
-        #     assert num_orders_from_prefix == len(data) // FIFOOrderId.size()
-
-        #     order_sequence_numbers = []
-
-        #     for i in range(num_orders_from_prefix):
-        #         order_data = data[i * FIFOOrderId.size() : (i + 1) * FIFOOrderId.size()]
-        #         order_container = FIFOOrderId.layout.parse(order_data)
-        #         order_sequence_numbers.append(FIFOOrderId.from_decoded(order_container))
-
-        #     # Print the list of orders
-        #     for order in order_sequence_numbers:
-        #         print(order.to_json())
+        return client_orders_map
