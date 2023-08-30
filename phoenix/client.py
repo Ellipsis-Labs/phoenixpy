@@ -122,7 +122,7 @@ class PhoenixClient:
             market_metadata.address,
         )
 
-    def get_place_limit_order_instruction(
+    def create_place_limit_order_instruction(
         self, limit_order_packet: Limit, market_pubkey: Pubkey, trader_pubkey: Pubkey
     ) -> Instruction:
         market_metadata: MarketMetadata = self.markets.get(market_pubkey, None)
@@ -134,7 +134,7 @@ class PhoenixClient:
 
     # TODO: Make cancel order parameter the correct type and add support
     # TODO: Add support for other order types
-    async def execute(
+    async def send_orders(
         self,
         order_packets: [ExecutableOrder],
         signer: Keypair,
@@ -147,7 +147,7 @@ class PhoenixClient:
         client_orders_map: TypedDict[int, FIFOOrderId] = {}
         for order in order_packets:
             if isinstance(order.order_packet, Limit):
-                limit_order_instruction = self.get_place_limit_order_instruction(
+                limit_order_instruction = self.create_place_limit_order_instruction(
                     order.order_packet, order.market_pubkey, signer.pubkey()
                 )
                 client_orders_map[order.order_packet.value["client_order_id"]] = None

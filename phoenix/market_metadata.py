@@ -130,12 +130,10 @@ class MarketMetadata:
         self, limit_order_packet: Limit, trader_pubkey: Pubkey
     ) -> Instruction:
         # TODO: Refactor these into a separate helper function
-        log_account = Pubkey.find_program_address(["log".encode("utf-8")], PROGRAM_ID)[
-            0
-        ]
+        log_account = Pubkey.find_program_address([b"log"], PROGRAM_ID)[0]
         seat = Pubkey.find_program_address(
             [
-                "seat".encode("utf-8"),
+                b"seat",
                 bytes(self.address),
                 bytes(trader_pubkey),
             ],
