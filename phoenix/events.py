@@ -63,6 +63,13 @@ def get_phoenix_events_from_confirmed_transaction_with_meta(
 
     for ix in inner_ixs:
         for inner in ix.instructions:
+            if (
+                tx_data.transaction.transaction.message.account_keys[
+                    inner.program_id_index
+                ]
+                != PROGRAM_ID
+            ):
+                continue
             raw_data = base58.b58decode(inner.data)
             if raw_data[0] == LOG_INSTRUCTION_DISCRIMINATOR:
                 data_array.append(raw_data[1:])
@@ -87,36 +94,11 @@ def get_phoenix_events_from_log_data(data: bytes) -> PhoenixEventsFromInstructio
     if byte != 1:
         raise Exception("early Unexpected event")
 
-    # Decode the header
-    (instruction,) = struct.unpack_from("B", data, reader_index)
-    reader_index += 1
-    (sequence_number,) = struct.unpack_from("Q", data, reader_index)
-    reader_index += 8
-    (timestamp,) = struct.unpack_from("Q", data, reader_index)
-    reader_index += 8
-    (slot,) = struct.unpack_from("Q", data, reader_index)
-    reader_index += 8
-    market = read_public_key(data[reader_index : reader_index + 32])
-    reader_index += 32
-    signer = read_public_key(data[reader_index : reader_index + 32])
-    reader_index += 32
-    (total_events,) = struct.unpack_from("H", data, reader_index)
-    reader_index += 2
-    header = {
-        "instruction": instruction,
-        "sequenceNumber": sequence_number,
-        "timestamp": timestamp,
-        "slot": slot,
-        "market": market,
-        "signer": signer,
-        "totalEvents": total_events,
-    }
-
+    header = AuditLogHeader.layout.parse(data[reader_index:])
     # Create the length buffer
-    length_buffer = struct.pack("I", total_events)
-
+    length_buffer = struct.pack("I", header.total_events)
     # Coerce the buffer for Borsh-encoded vector decoding
-    events_data = length_buffer + data[reader_index:]
+    events_data = length_buffer + data[AuditLogHeader.layout.sizeof() + 1 :]
 
     events = decode_phoenix_events(events_data)
 
@@ -148,13 +130,10 @@ def decode_phoenix_events(data: bytes) -> List[PhoenixMarketEventKind]:
         event = phoenix_market_event_layout.parse(data[offset:])
         # Get the corresponding class, parse and adjust the offset
         event_type = list(event.keys())[0]
-        if event_type == "Uninitialized":
-            offset += 1
-            continue
         event_class = EVENT_CLASSES[event_type]
         event_instance = from_decoded(event)
         events.append(event_instance)
-        event_size = event_class.layout.sizeof()
+        event_size = event_class.layout.sizeof() + 1
         offset += event_size
     assert (
         len(events) == num_of_events

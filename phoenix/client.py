@@ -1,18 +1,36 @@
 import datetime
-from typing import TypedDict
+from typing import TypedDict, Union, List
 from uuid import uuid4
-from construct import Optional
+from phoenix.instructions import cancel_all_orders
+from phoenix.instructions import cancel_multiple_orders_by_id
+from phoenix.instructions.cancel_all_orders import CancelAllOrdersAccounts
+from phoenix.instructions.cancel_multiple_orders_by_id import (
+    CancelMultipleOrdersByIdAccounts,
+    CancelMultipleOrdersByIdArgs,
+)
 from phoenix.market_metadata import MarketMetadata
+from phoenix.program_id import PROGRAM_ID
 from phoenix.types import self_trade_behavior
-from phoenix.types.order_packet import Limit, LimitValue, OrderPacketKind
-from phoenix.types.side import SideKind
+from phoenix.types.cancel_multiple_orders_by_id_params import (
+    CancelMultipleOrdersByIdParams,
+)
+from phoenix.types.cancel_order_params import CancelOrderParams
+from phoenix.types.market_status import PostOnly
+from phoenix.types.order_packet import (
+    ImmediateOrCancel,
+    Limit,
+    LimitValue,
+    OrderPacketKind,
+)
+from spl.token.instructions import get_associated_token_address
+from phoenix.types.side import Ask, Bid, SideKind
 from phoenix.events import get_phoenix_events_from_confirmed_transaction_with_meta
 from solana.rpc.commitment import Commitment
 from solana.rpc.async_api import AsyncClient
 from solana.rpc.types import TxOpts
 from solders.pubkey import Pubkey
+from solders.hash import Hash
 from solana.transaction import Instruction, Transaction, Keypair
-import base64
 from phoenix.types.fifo_order_id import FIFOOrderId
 
 
@@ -119,7 +137,7 @@ class PhoenixClient:
                     fail_silently_on_insufficient_funds=fail_silently_on_insufficient_funds,
                 )
             ),
-            market_metadata.address,
+            market_pubkey=market_pubkey,
         )
 
     def create_place_limit_order_instruction(
@@ -136,36 +154,54 @@ class PhoenixClient:
     # TODO: Add support for other order types
     async def send_orders(
         self,
-        order_packets: [ExecutableOrder],
         signer: Keypair,
-        cancel_orders: [int] = None,
+        order_packets: List[ExecutableOrder],
+        pre_instructions: [Instruction] = None,
+        post_instructions: [Instruction] = None,
         commitment=None,
+        tx_opts: TxOpts | None = None,
+        recent_blockhash: Hash | None = None,
     ):
         # Create instructions for each order_packet and create client_order_id map
         # Add instructions to transaction
         transaction = Transaction()
+
+        # Add pre-instructions
+        if pre_instructions is not None:
+            for instruction in pre_instructions:
+                transaction.add(instruction)
+
         client_orders_map: TypedDict[int, FIFOOrderId] = {}
-        for order in order_packets:
-            if isinstance(order.order_packet, Limit):
-                limit_order_instruction = self.create_place_limit_order_instruction(
-                    order.order_packet, order.market_pubkey, signer.pubkey()
-                )
-                client_orders_map[order.order_packet.value["client_order_id"]] = None
-                transaction.add(limit_order_instruction)
-            else:
-                raise ValueError("Unimplemented order type")
+        for executable_order in order_packets:
+            order_packet = executable_order.order_packet
+            market_pubkey = executable_order.market_pubkey
+            match type(order_packet):
+                case _ if isinstance(order_packet, Limit):
+                    limit_order_instruction = self.create_place_limit_order_instruction(
+                        order_packet, market_pubkey, signer.pubkey()
+                    )
+                    client_orders_map[order_packet.value["client_order_id"]] = None
+                    transaction.add(limit_order_instruction)
+                case _ if isinstance(order_packet, PostOnly):
+                    raise ValueError("Unimplemented order type, PostOnly")
+                case _ if isinstance(order_packet, ImmediateOrCancel):
+                    raise ValueError("Unimplemented order type, ImmediateOrCancel")
+                case _:
+                    raise ValueError("Unrecognized order type")
+
+        # Add pre-instructions
+        if post_instructions is not None:
+            for instruction in post_instructions:
+                transaction.add(instruction)
 
         # Send transaction
         response = await self.client.send_transaction(
-            transaction,
-            signer,
+            transaction, signer, opts=tx_opts, recent_blockhash=recent_blockhash
         )
-
         signature = response.value
-        await self.client.confirm_transaction(signature, commitment)
-
         # Get transaction and parse for the FIFOOrderId of each order
         commitment = commitment if commitment is not None else self.commitment
+        await self.client.confirm_transaction(signature, commitment)
         transaction_response = await self.client.get_transaction(
             signature, "json", commitment
         )
@@ -173,7 +209,6 @@ class PhoenixClient:
         phoenix_transaction = get_phoenix_events_from_confirmed_transaction_with_meta(
             transaction
         )
-
         for ix_events in phoenix_transaction.events_from_instructions:
             for phoenix_event in ix_events.events:
                 if phoenix_event.kind == "Place":
@@ -185,3 +220,108 @@ class PhoenixClient:
                     )
 
         return client_orders_map
+
+    def create_cancel_order_instruction(
+        self,
+        trader: Pubkey,
+        market_pubkey: Pubkey,
+        order_ids: Union[List[FIFOOrderId], None] = None,
+    ) -> Instruction:
+        log_account = Pubkey.find_program_address([b"log"], PROGRAM_ID)[0]
+        market_metadata = self.markets.get(market_pubkey, None)
+        if market_metadata == None:
+            raise ValueError("Market not found: ", market_pubkey)
+        if order_ids is None:
+            accounts = CancelAllOrdersAccounts(
+                phoenix_program=PROGRAM_ID,
+                log_authority=log_account,
+                market=market_pubkey,
+                trader=trader,
+                base_account=get_associated_token_address(
+                    trader, market_metadata.base_mint
+                ),
+                quote_account=get_associated_token_address(
+                    trader, market_metadata.quote_mint
+                ),
+                base_vault=market_metadata.base_vault,
+                quote_vault=market_metadata.quote_vault,
+            )
+            return cancel_all_orders(accounts)
+        else:
+            accounts = CancelMultipleOrdersByIdAccounts(
+                phoenix_program=PROGRAM_ID,
+                log_authority=log_account,
+                market=market_pubkey,
+                trader=trader,
+                base_account=get_associated_token_address(
+                    trader, market_metadata.base_mint
+                ),
+                quote_account=get_associated_token_address(
+                    trader, market_metadata.quote_mint
+                ),
+                base_vault=market_metadata.base_vault,
+                quote_vault=market_metadata.quote_vault,
+            )
+
+            orders = [
+                CancelOrderParams(
+                    side=Bid if order_id.order_sequence_number >= 1 << 63 else Ask,
+                    price_in_ticks=order_id.price_in_ticks,
+                    order_sequence_number=order_id.order_sequence_number,
+                )
+                for order_id in order_ids
+            ]
+            args = CancelMultipleOrdersByIdArgs(
+                params=CancelMultipleOrdersByIdParams(orders=orders)
+            )
+            return cancel_multiple_orders_by_id(args, accounts)
+
+    async def cancel_orders(
+        self,
+        signer: Keypair,
+        market_pubkey: Pubkey,
+        order_ids: Union[List[FIFOOrderId], None] = None,
+        commitment=None,
+        tx_opts: TxOpts | None = None,
+        recent_blockhash: Hash | None = None,
+    ) -> [FIFOOrderId]:
+        log_account = Pubkey.find_program_address([b"log"], PROGRAM_ID)[0]
+        market_metadata = self.markets.get(market_pubkey, None)
+        if market_metadata == None:
+            raise ValueError("Market not found: ", market_pubkey)
+
+        transaction = Transaction()
+        transaction.add(
+            self.create_cancel_order_instruction(
+                signer.pubkey(), market_pubkey, order_ids
+            )
+        )
+        # Get transaction and parse for the FIFOOrderId of each order
+        commitment = commitment if commitment is not None else self.commitment
+        # Send transaction
+        response = await self.client.send_transaction(
+            transaction, signer, opts=tx_opts, recent_blockhash=recent_blockhash
+        )
+        signature = response.value
+        await self.client.confirm_transaction(signature, commitment)
+        transaction_response = await self.client.get_transaction(
+            signature, "json", commitment
+        )
+        transaction = transaction_response.value
+        phoenix_transaction = get_phoenix_events_from_confirmed_transaction_with_meta(
+            transaction
+        )
+        cancelled_orders: [FIFOOrderId] = []
+        for ix_events in phoenix_transaction.events_from_instructions:
+            for phoenix_event in ix_events.events:
+                if phoenix_event.kind == "Reduce":
+                    if phoenix_event.value[0].base_lots_remaining == 0:
+                        cancelled_orders.append(
+                            FIFOOrderId(
+                                price_in_ticks=phoenix_event.value[0].price_in_ticks,
+                                order_sequence_number=phoenix_event.value[
+                                    0
+                                ].order_sequence_number,
+                            )
+                        )
+        return cancelled_orders

@@ -42,9 +42,30 @@ async def main():
 
     # Execute order packets; returns a map of client_order_id to FIFOOrderId of orders that were executed
     order_ids_map = await client.send_orders(
-        [limit_order_packet, limit_order_packet_two], signer
+        signer,
+        [limit_order_packet, limit_order_packet_two],
     )
     print("Order Id Map: ", order_ids_map)
+
+    orders_to_cancel = list(order_ids_map.values())
+    print("Orders to cancel: ", orders_to_cancel)
+
+    # Cancel orders
+    cancelled_orders = await client.cancel_orders(
+        signer,
+        solusdc_market_pubkey,
+        orders_to_cancel,
+    )
+
+    print("Cancelled orders: ", cancelled_orders)
+
+    # Cancel all orders
+    print("Cancelling all orders")
+    cancelled_orders = await client.cancel_orders(
+        signer,
+        solusdc_market_pubkey,
+    )
+    print("Cancelled orders: ", cancelled_orders)
 
     await client.close()
 
