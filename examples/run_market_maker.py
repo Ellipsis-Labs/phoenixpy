@@ -444,6 +444,9 @@ class Bot:
                         )
                     ).value
                     print("\nAddress:", self.signer.pubkey())
+                    print(
+                        f"Current offset: {'+' if self.offset_in_bps> 0 else ''}{self.offset_in_bps} bps"
+                    )
                     print("Wallet balance:", wallet_balance / 1e9)
 
                     # Print base balance
