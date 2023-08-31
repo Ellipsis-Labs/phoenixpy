@@ -61,7 +61,7 @@ class Bot:
         self.sequence_number = -1
         self.metadata: Union[MarketMetadata, None] = None
 
-        self.offset = 0
+        self.offset_in_bps = 0
 
         self.__updating_quotes = False
 
@@ -84,19 +84,22 @@ class Bot:
                     self.signer.pubkey(), commitment="confirmed"
                 )
             ).value
+            print("Wallet balance:", wallet_balance)
 
             balance = await self.phoenix_client.client.get_balance(
                 sol_ata, commitment="confirmed"
             )
+            print("ATA balance:", balance.value)
 
             if balance.value < 1e9:
                 transaction = Transaction()
                 # Top up the WSOL account with SOL and keep 1 SOL for gas
+                print(int(wallet_balance - 1e9))
                 transfer_ix = transfer(
                     TransferParams(
                         from_pubkey=self.signer.pubkey(),
                         to_pubkey=sol_ata,
-                        lamports=int(wallet_balance - 1e9),
+                        lamports=int(wallet_balance - 1e8),
                     ),
                 )
                 transaction.add(transfer_ix)
@@ -140,7 +143,6 @@ class Bot:
                         self.coinbase_vwap = (
                             best_bid * best_ask_size + best_ask * best_bid_size
                         ) / (best_bid_size + best_ask_size)
-                        print("Coinbase fair price:", self.coinbase_vwap)
                         await self.update_quotes()
                     else:
                         print("Received empty message")
@@ -160,7 +162,7 @@ class Bot:
         starting_orders.extend(self.asks)
 
         fair = self.coinbase_vwap
-        fair += self.metadata.ticks_to_float_price(self.offset)
+        fair *= 1 + (self.offset_in_bps / 10000)
 
         if len(starting_orders) == 2:
             bid = self.metadata.ticks_to_float_price(
@@ -174,6 +176,9 @@ class Bot:
 
             if not force and abs(fair - mid) <= edge * 0.25:
                 return
+
+        print("Coinbase fair price:", self.coinbase_vwap)
+        print("Our fair price:", fair)
 
         bid_price = fair * (1 - (self.edge_in_basis_points / 10000))
         bid = self.phoenix_client.get_limit_order_packet(
@@ -399,10 +404,8 @@ class Bot:
                 # handle backspace key
                 elif ch == b"\x7f":
                     prev = None
-                    print(
-                        f"Offset Reset {self.metadata.ticks_to_float_price(self.offset)} -> 0"
-                    )
-                    self.offset = 0
+                    print(f"Offset Reset {self.offset_in_bps} -> 0")
+                    self.offset_in_bps = 0
                     await self.update_quotes(force=True)
 
                 print(f"Got key: {ch}")
@@ -416,15 +419,15 @@ class Bot:
                 elif prev == b"[":
                     # handle up arrow
                     if ch == b"A":
-                        self.offset += 1
+                        self.offset_in_bps += 1
                         print(
-                            f"Offset Up {self.metadata.ticks_to_float_price(self.offset - 1)} -> {self.metadata.ticks_to_float_price(self.offset)}"
+                            f"Offset Up {self.offset_in_bps - 1} -> {self.offset_in_bps}"
                         )
                     # handle down arrow
                     elif ch == b"B":
-                        self.offset -= 1
+                        self.offset_in_bps -= 1
                         print(
-                            f"Offset Down {self.metadata.ticks_to_float_price(self.offset + 1)} -> {self.metadata.ticks_to_float_price(self.offset)}"
+                            f"Offset Down {self.offset_in_bps + 1} -> {self.offset_in_bps}"
                         )
                     prev = None
 
