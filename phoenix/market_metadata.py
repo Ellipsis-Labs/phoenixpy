@@ -84,6 +84,11 @@ class MarketMetadata:
     def quote_lots_to_quote_atoms(self, quote_lots):
         return quote_lots * self.quote_atoms_per_quote_lot
 
+    def quote_lots_to_quote_units(self, quote_lots):
+        return quote_lots * (
+            self.quote_atoms_per_quote_lot / self.quote_atoms_per_quote_unit
+        )
+
     def base_atoms_to_raw_base_units_as_float(self, base_atoms):
         return base_atoms / self.base_atoms_per_raw_base_unit
 

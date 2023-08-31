@@ -1,10 +1,10 @@
 import asyncio
-from typing import Any, Callable, Dict, TypedDict, Union, List
+from typing import Any, Callable, Dict, Tuple, TypedDict, Union, List
 from uuid import uuid4
 import time
 import traceback
 from asyncstdlib import enumerate
-from phoenix.instructions import cancel_all_orders
+from phoenix.instructions import cancel_all_orders, withdraw_funds
 from phoenix.instructions import cancel_multiple_orders_by_id
 from phoenix.instructions import cancel_all_orders_with_free_funds
 from phoenix.instructions import cancel_multiple_orders_by_id_with_free_funds
@@ -15,6 +15,11 @@ from phoenix.instructions.cancel_all_orders_with_free_funds import (
 from phoenix.instructions.cancel_multiple_orders_by_id import (
     CancelMultipleOrdersByIdAccounts,
     CancelMultipleOrdersByIdArgs,
+)
+from phoenix.instructions.withdraw_funds import (
+    WithdrawFundsAccounts,
+    WithdrawFundsArgs,
+    withdraw_funds,
 )
 from phoenix.instructions.cancel_multiple_orders_by_id_with_free_funds import (
     CancelMultipleOrdersByIdWithFreeFundsAccounts,
@@ -27,13 +32,13 @@ from phoenix.types.cancel_multiple_orders_by_id_params import (
     CancelMultipleOrdersByIdParams,
 )
 from phoenix.types.cancel_order_params import CancelOrderParams
-from phoenix.types.market_status import PostOnly
 from phoenix.types.order_packet import (
     ImmediateOrCancel,
     ImmediateOrCancelValue,
     Limit,
     LimitValue,
     OrderPacketKind,
+    PostOnly,
     PostOnlyValue,
 )
 from spl.token.instructions import get_associated_token_address
@@ -48,6 +53,7 @@ from solders.signature import Signature
 from solana.transaction import Instruction, Transaction, Keypair
 from solana.rpc.websocket_api import connect
 from phoenix.types.fifo_order_id import FIFOOrderId
+from phoenix.types.withdraw_params import WithdrawParams
 
 
 from .market import DEFAULT_L2_LADDER_DEPTH, Ladder, Market
@@ -212,7 +218,7 @@ class PhoenixClient:
         client_order_id: int = None,
         self_trade_behavior: self_trade_behavior = self_trade_behavior.DecrementTake,
         match_limit: int = None,
-        use_only_deposit_funds: bool = False,
+        use_only_deposited_funds: bool = False,
         last_valid_slot: int = None,
         last_valid_unix_timestamp: int = None,
         fail_silently_on_insufficient_funds: bool = False,
@@ -240,7 +246,7 @@ class PhoenixClient:
                     self_trade_behavior=self_trade_behavior,
                     match_limit=match_limit,
                     client_order_id=client_order_id,
-                    use_only_deposited_funds=use_only_deposit_funds,
+                    use_only_deposited_funds=use_only_deposited_funds,
                     last_valid_slot=last_valid_slot,
                     last_valid_unix_timestamp_in_seconds=last_valid_unix_timestamp,
                     fail_silently_on_insufficient_funds=fail_silently_on_insufficient_funds,
@@ -249,14 +255,15 @@ class PhoenixClient:
             market_pubkey=market_pubkey,
         )
 
-    def get_post_order_packet(
+    def get_post_only_order_packet(
         self,
         market_pubkey: Pubkey,
         side: SideKind,
         price_in_quote_units: float,
         size_in_base_units: float,
         client_order_id: int = None,
-        use_only_deposit_funds: bool = False,
+        reject_post_only: bool = False,
+        use_only_deposited_funds: bool = False,
         last_valid_slot: int = None,
         last_valid_unix_timestamp: int = None,
         fail_silently_on_insufficient_funds: bool = False,
@@ -282,7 +289,8 @@ class PhoenixClient:
                     price_in_ticks=price_in_ticks,
                     num_base_lots=num_base_lots,
                     client_order_id=client_order_id,
-                    use_only_deposited_funds=use_only_deposit_funds,
+                    reject_post_only=reject_post_only,
+                    use_only_deposited_funds=use_only_deposited_funds,
                     last_valid_slot=last_valid_slot,
                     last_valid_unix_timestamp_in_seconds=last_valid_unix_timestamp,
                     fail_silently_on_insufficient_funds=fail_silently_on_insufficient_funds,
@@ -562,12 +570,12 @@ class PhoenixClient:
         signer: Keypair,
         market_pubkey: Pubkey,
         order_ids: Union[List[FIFOOrderId], None] = None,
-        withdraw_funds=True,
+        withdraw_cancelled_funds=True,
+        withdraw_free_funds=False,
         commitment=None,
         tx_opts: TxOpts | None = None,
         recent_blockhash: Hash | None = None,
-    ) -> [FIFOOrderId]:
-        log_account = Pubkey.find_program_address([b"log"], PROGRAM_ID)[0]
+    ) -> Tuple[Signature, List[FIFOOrderId]]:
         market_metadata = self.markets.get(market_pubkey, None)
         if market_metadata == None:
             raise ValueError("Market not found: ", market_pubkey)
@@ -575,9 +583,34 @@ class PhoenixClient:
         transaction = Transaction()
         transaction.add(
             self.create_cancel_order_instruction(
-                signer.pubkey(), market_pubkey, order_ids, withdraw_funds=withdraw_funds
+                signer.pubkey(),
+                market_pubkey,
+                order_ids,
+                withdraw_funds=withdraw_cancelled_funds,
             )
         )
+        if withdraw_free_funds:
+            args = WithdrawFundsArgs(
+                withdraw_funds_params=WithdrawParams(
+                    quote_lots_to_withdraw=None,
+                    base_lots_to_withdraw=None,
+                )
+            )
+            accounts = WithdrawFundsAccounts(
+                phoenix_program=PROGRAM_ID,
+                log_authority=Pubkey.find_program_address([b"log"], PROGRAM_ID)[0],
+                market=market_pubkey,
+                trader=signer.pubkey(),
+                base_account=get_associated_token_address(
+                    signer.pubkey(), market_metadata.base_mint
+                ),
+                quote_account=get_associated_token_address(
+                    signer.pubkey(), market_metadata.quote_mint
+                ),
+                base_vault=market_metadata.base_vault,
+                quote_vault=market_metadata.quote_vault,
+            )
+            transaction.add(withdraw_funds(args, accounts))
         # Get transaction and parse for the FIFOOrderId of each order
         commitment = commitment if commitment is not None else self.commitment
         # Send transaction
@@ -606,4 +639,4 @@ class PhoenixClient:
                                 ].order_sequence_number,
                             )
                         )
-        return cancelled_orders
+        return (signature, cancelled_orders)

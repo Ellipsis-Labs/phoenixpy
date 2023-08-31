@@ -3,6 +3,7 @@ import sys
 import termios
 import argparse
 import asyncio
+import os
 import json
 from typing import Union
 import websockets
@@ -57,17 +58,18 @@ class Bot:
         self.phoenix_best_bid_size = None
         self.phoenix_best_ask = None
         self.phoenix_best_ask_size = None
-        self.initialized = False
+        self.is_running = False
         self.sequence_number = -1
         self.metadata: Union[MarketMetadata, None] = None
 
         self.offset_in_bps = 0
 
+        self.market_snapshot = None
         self.__updating_quotes = False
 
     async def initialize(self):
         await self.phoenix_client.add_market(self.market)
-        self.initialized = True
+        self.is_running = True
         self.metadata = self.phoenix_client.markets[self.market]
 
         if (
@@ -115,7 +117,7 @@ class Bot:
                 )
 
     async def get_fair_price(self):
-        if not self.initialized:
+        if not self.is_running:
             raise Exception("Bot not initialized")
         # Get price feed from Coinbase (SOL-USD)
         # In reality, you would want to get the price feed from multiple sources
@@ -136,6 +138,8 @@ class Bot:
                     data = await ws.recv()
                     if data != "":
                         price_feed = json.loads(data)
+                        if "best_bid" not in price_feed:
+                            continue
                         best_bid = float(price_feed["best_bid"])
                         best_ask = float(price_feed["best_ask"])
                         best_bid_size = float(price_feed["best_bid_size"])
@@ -181,7 +185,7 @@ class Bot:
         print("Our fair price:", fair)
 
         bid_price = fair * (1 - (self.edge_in_basis_points / 10000))
-        bid = self.phoenix_client.get_limit_order_packet(
+        bid = self.phoenix_client.get_post_only_order_packet(
             self.market,
             Bid,
             bid_price,
@@ -190,7 +194,7 @@ class Bot:
             fail_silently_on_insufficient_funds=True,
         )
         ask_price = fair * (1 + (self.edge_in_basis_points / 10000))
-        ask = self.phoenix_client.get_limit_order_packet(
+        ask = self.phoenix_client.get_post_only_order_packet(
             self.market,
             Ask,
             ask_price,
@@ -247,7 +251,7 @@ class Bot:
             return await self.update_quotes(attempts=attempts + 1)
 
         self.sequence_number = max(response.sequence_number, self.sequence_number)
-        print(response.sequence_number, response.signature)
+        print(f"https://solscan.io/tx/{response.signature}")
         if ASK_CLIENT_ORDER_ID in response.client_orders_map:
             if response.client_orders_map[ASK_CLIENT_ORDER_ID] is not None:
                 self.asks = [response.client_orders_map[ASK_CLIENT_ORDER_ID]]
@@ -304,6 +308,7 @@ class Bot:
     async def handle_market(self, market: Market):
         if market.sequence_number <= self.sequence_number:
             return
+        self.market_snapshot = market
         if self.__updating_quotes:
             return
         self.sequence_number = market.sequence_number
@@ -365,14 +370,14 @@ class Bot:
             await self.update_quotes(force=True)
 
     async def l2_book_subscribe(self):
-        if not self.initialized:
+        if not self.is_running:
             raise Exception("Bot not initialized")
         await self.phoenix_client.l2_orderbook_subscribe(
             self.market, self.handle_l2_orderbook
         )
 
     async def market_subscribe(self):
-        if not self.initialized:
+        if not self.is_running:
             raise Exception("Bot not initialized")
         await self.phoenix_client.market_subscribe(self.market, self.handle_market)
 
@@ -407,8 +412,109 @@ class Bot:
                     print(f"Offset Reset {self.offset_in_bps} -> 0")
                     self.offset_in_bps = 0
                     await self.update_quotes(force=True)
+                elif ch == b"x":
+                    print("Cancelling all orders")
+                    await self.phoenix_client.cancel_orders(
+                        self.signer, market_pubkey=self.market
+                    )
+                elif ch == b"q":
+                    (signature, _) = await self.phoenix_client.cancel_orders(
+                        self.signer, market_pubkey=self.market, withdraw_free_funds=True
+                    )
+                    print(f"https://solscan.io/tx/{signature}")
+                    self.is_running = False
+                    print("Cancelled all orders and exiting program.")
+                    exit(0)
+                elif ch == b"v":
+                    # Print trader info
+                    if self.market_snapshot is None:
+                        continue
+                    trader_index = (
+                        self.market_snapshot.trader_pubkey_to_trader_index.get(
+                            self.signer.pubkey(), None
+                        )
+                    )
+                    if trader_index is None:
+                        print("Trader not found in market")
+                        continue
+                    # Print wallet balance
+                    wallet_balance = (
+                        await self.phoenix_client.client.get_balance(
+                            self.signer.pubkey(), commitment="confirmed"
+                        )
+                    ).value
+                    print("\nAddress:", self.signer.pubkey())
+                    print("Wallet balance:", wallet_balance / 1e9)
 
-                print(f"Got key: {ch}")
+                    # Print base balance
+                    base_ata = get_associated_token_address(
+                        self.signer.pubkey(),
+                        WRAPPED_SOL_MINT,
+                    )
+                    balance = await self.phoenix_client.client.get_balance(
+                        base_ata, commitment="confirmed"
+                    )
+                    print("Base mint:", self.metadata.base_mint)
+                    print(
+                        f"\tBase wallet balance:",
+                        balance.value / 10**self.metadata.base_decimals,
+                    )
+                    trader_state = self.market_snapshot.traders[self.signer.pubkey()]
+                    print(
+                        f"\tBase locked balance:",
+                        self.metadata.base_lots_to_raw_base_units_as_float(
+                            trader_state.base_lots_locked
+                        ),
+                    )
+                    print(
+                        f"\t  Base free balance:",
+                        self.metadata.base_lots_to_raw_base_units_as_float(
+                            trader_state.base_lots_free
+                        ),
+                    )
+                    print()
+                    print("Quote mint:", self.metadata.quote_mint)
+                    quote_ata = get_associated_token_address(
+                        self.signer.pubkey(),
+                        self.metadata.quote_mint,
+                    )
+                    balance = (
+                        await self.phoenix_client.client.get_token_account_balance(
+                            quote_ata, commitment="confirmed"
+                        )
+                    )
+                    print(
+                        "\tQuote wallet balance:",
+                        balance.value.ui_amount_string,
+                    )
+                    print(
+                        "\tQuote locked balance:",
+                        self.metadata.quote_lots_to_quote_units(
+                            trader_state.quote_lots_locked
+                        ),
+                    )
+                    print(
+                        "\t  Quote free balance:",
+                        self.metadata.quote_lots_to_quote_units(
+                            trader_state.quote_lots_free
+                        ),
+                    )
+                    print()
+                elif ch == b"h":
+                    help_str = (
+                        "\nTo use the interactive terminal, press the following keys:\n"
+                    )
+                    # right align this strings on the colon
+                    help_str += "\t     Enter: Update quotes\n"
+                    help_str += "\t Backspace: Reset offset\n"
+                    help_str += "\t  Up Arrow: Increase offset\n"
+                    help_str += "\tDown Arrow: Decrease offset\n"
+                    help_str += "\t         x: Cancel all orders\n"
+                    help_str += "\t         q: Cancel all orders and exit program\n"
+                    help_str += "\t         v: Print trader balances\n"
+                    help_str += "\t         h: Print this help message\n"
+                    print(help_str)
+
                 # handle arrow keys
                 if ch == b"\x1b":
                     prev = ch
@@ -457,6 +563,15 @@ async def main():
         help="URL of Solana cluster",
         default="https://api.mainnet-beta.solana.com",
     )
+    # Allow user to specify edge in bps
+    parser.add_argument(
+        "-e",
+        "--edge",
+        type=int,
+        help="Edge in basis points",
+        default=5,
+    )
+
     args = parser.parse_args()
 
     if args.keypair is not None:
@@ -478,9 +593,10 @@ async def main():
         signer,
         client,
         Pubkey.from_string("4DoNfFBfF7UokCC2FQzriy7yHK6DY6NVdYpuekQ5pRgg"),
-        edge_in_basis_points=5,
+        edge_in_basis_points=args.edge,
     )
     await bot.initialize()
+    print("Press 'h' to see help message")
     await asyncio.gather(
         bot.get_fair_price(),
         bot.l2_book_subscribe(),
