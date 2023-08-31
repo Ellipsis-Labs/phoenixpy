@@ -4,3 +4,4 @@ anchorpy
 borsh_construct
 uuid
 base58
+requests

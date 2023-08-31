@@ -1,7 +1,8 @@
 import asyncio
 import os
 import json
-from phoenix.market import Market
+
+import requests
 from phoenix.client import PhoenixClient
 from solders.pubkey import Pubkey
 from solders.keypair import Keypair
@@ -32,12 +33,20 @@ async def main():
 
     # TODO: Create method to get a seat on a market
 
+    # make a request to the SOL-USD market on coinbase and fetch the price
+
+    price = float(
+        requests.get("https://api.pro.coinbase.com/products/SOL-USD/ticker").json()[
+            "price"
+        ]
+    )
+
     # Create order packets for the given market
     limit_order_packet = client.get_limit_order_packet(
-        solusdc_market_pubkey, Bid, 18, 0.01
+        solusdc_market_pubkey, Bid, price * 0.98, 0.01
     )
     limit_order_packet_two = client.get_limit_order_packet(
-        solusdc_market_pubkey, Bid, 19, 0.01
+        solusdc_market_pubkey, Bid, price * 0.97, 0.01
     )
 
     # Execute order packets; returns a map of client_order_id to FIFOOrderId of orders that were executed

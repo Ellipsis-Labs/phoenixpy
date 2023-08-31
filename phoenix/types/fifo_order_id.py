@@ -47,3 +47,9 @@ class FIFOOrderId:
             price_in_ticks=obj["price_in_ticks"],
             order_sequence_number=obj["order_sequence_number"],
         )
+
+    def __hash__(self):
+        return hash((self.price_in_ticks, self.order_sequence_number))
+
+    def __repr__(self) -> str:
+        return f"FIFOOrderId(price_in_ticks={self.price_in_ticks}, order_sequence_number={self.order_sequence_number})"

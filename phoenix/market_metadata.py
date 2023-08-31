@@ -1,10 +1,14 @@
+from typing import Union
+from phoenix.instructions import swap
 from phoenix.instructions.place_limit_order import (
     PlaceLimitOrderAccounts,
     PlaceLimitOrderArgs,
     place_limit_order,
 )
+from phoenix.instructions.swap import SwapAccounts, SwapArgs
 from phoenix.program_id import PROGRAM_ID
-from phoenix.types.order_packet import Limit
+from phoenix.types.market_status import PostOnly
+from phoenix.types.order_packet import ImmediateOrCancel, Limit
 from .types.market_header import MarketHeader
 from solders.pubkey import Pubkey
 from spl.token.instructions import get_associated_token_address
@@ -127,7 +131,7 @@ class MarketMetadata:
         )
 
     def create_place_limit_order_instruction(
-        self, limit_order_packet: Limit, trader_pubkey: Pubkey
+        self, limit_order_packet: Union[Limit, PostOnly], trader_pubkey: Pubkey
     ) -> Instruction:
         # TODO: Refactor these into a separate helper function
         log_account = Pubkey.find_program_address([b"log"], PROGRAM_ID)[0]
@@ -156,5 +160,27 @@ class MarketMetadata:
 
         return place_limit_order(
             place_limit_order_args,
+            accounts,
+        )
+
+    def create_swap_instruction(
+        self, ioc_order_packet: ImmediateOrCancel, trader_pubkey: Pubkey
+    ) -> Instruction:
+        log_account = Pubkey.find_program_address([b"log"], PROGRAM_ID)[0]
+        base_account = get_associated_token_address(trader_pubkey, self.base_mint)
+        quote_account = get_associated_token_address(trader_pubkey, self.quote_mint)
+        accounts = SwapAccounts(
+            phoenix_program=PROGRAM_ID,
+            log_authority=log_account,
+            market=self.address,
+            trader=trader_pubkey,
+            base_account=base_account,
+            quote_account=quote_account,
+            base_vault=self.base_vault,
+            quote_vault=self.quote_vault,
+        )
+        swap_args = SwapArgs(order_packet=ioc_order_packet)
+        return swap(
+            swap_args,
             accounts,
         )
