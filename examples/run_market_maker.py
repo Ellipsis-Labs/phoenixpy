@@ -146,10 +146,8 @@ class Bot:
                         print("Received empty message")
                 except ValueError as e:
                     print(e)
-                    print("{} - data: {}".format(e, data))
                 except Exception as e:
                     print(e)
-                    print("{} - data: {}".format(e, data))
 
     async def update_quotes(self, attempts=1):
         if attempts > 3:
