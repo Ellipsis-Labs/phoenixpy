@@ -140,7 +140,7 @@ class Bot:
                         self.coinbase_vwap = (
                             best_bid * best_ask_size + best_ask * best_bid_size
                         ) / (best_bid_size + best_ask_size)
-                        print(self.coinbase_vwap)
+                        print("Coinbase fair price:", self.coinbase_vwap)
                         await self.update_quotes()
                     else:
                         print("Received empty message")
@@ -149,7 +149,7 @@ class Bot:
                 except Exception as e:
                     print(e)
 
-    async def update_quotes(self, attempts=1):
+    async def update_quotes(self, force=False, attempts=1):
         if attempts > 3:
             print("Failed to update quotes, attempted 3 times")
             self.__updating_quotes = False
@@ -161,6 +161,19 @@ class Bot:
 
         fair = self.coinbase_vwap
         fair += self.metadata.ticks_to_float_price(self.offset)
+
+        if len(starting_orders) == 2:
+            bid = self.metadata.ticks_to_float_price(
+                starting_orders[0].order_id.price_in_ticks
+            )
+            ask = self.metadata.ticks_to_float_price(
+                starting_orders[1].order_id.price_in_ticks
+            )
+            mid = (bid + ask) / 2
+            edge = mid * (self.edge_in_basis_points / 10000)
+
+            if not force and abs(fair - mid) <= edge * 0.25:
+                return
 
         bid_price = fair * (1 - (self.edge_in_basis_points / 10000))
         bid = self.phoenix_client.get_limit_order_packet(
@@ -318,6 +331,8 @@ class Bot:
                         ),
                     )
                 )
+        else:
+            found_bid = True
         if len(self.asks) > 0:
             ask = self.asks[0]
             for order in market.asks:
@@ -338,9 +353,11 @@ class Bot:
                         ),
                     )
                 )
+        else:
+            found_ask = True
 
         if not found_bid or not found_ask:
-            await self.update_quotes()
+            await self.update_quotes(force=True)
 
     async def l2_book_subscribe(self):
         if not self.initialized:
@@ -378,7 +395,7 @@ class Bot:
                 # handle enter key
                 if ch == b"\n":
                     prev = None
-                    await self.update_quotes()
+                    await self.update_quotes(force=True)
                 # handle backspace key
                 elif ch == b"\x7f":
                     prev = None
@@ -386,7 +403,7 @@ class Bot:
                         f"Offset Reset {self.metadata.ticks_to_float_price(self.offset)} -> 0"
                     )
                     self.offset = 0
-                    await self.update_quotes()
+                    await self.update_quotes(force=True)
 
                 print(f"Got key: {ch}")
                 # handle arrow keys
