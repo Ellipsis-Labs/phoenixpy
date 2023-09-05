@@ -127,7 +127,7 @@ class Bot:
                         "product_ids": [
                             "SOL-USD",
                         ],
-                        "channels": [{"name": "ticker", "product_ids": ["SOL-USD"]}],
+                        "channels": ["heartbeat", {"name": "ticker", "product_ids": ["SOL-USD"]}],
                     }
                 )
             )
