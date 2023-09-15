@@ -53,3 +53,15 @@ class FIFOOrderId:
 
     def __repr__(self) -> str:
         return f"FIFOOrderId(price_in_ticks={self.price_in_ticks}, order_sequence_number={self.order_sequence_number})"
+
+    def __lt__(self, other: FIFOOrderId) -> bool:
+        if self.order_sequence_number & 1 << 63 != 0:
+            if self.price_in_ticks == other.price_in_ticks:
+                return self.order_sequence_number < other.order_sequence_number
+            else:
+                return self.price_in_ticks < other.price_in_ticks
+        else:
+            if self.price_in_ticks == other.price_in_ticks:
+                return self.order_sequence_number > other.order_sequence_number
+            else:
+                return self.price_in_ticks > other.price_in_ticks
