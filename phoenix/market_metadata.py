@@ -135,6 +135,14 @@ class MarketMetadata:
             self.quote_atoms_per_quote_unit * self.raw_base_units_per_base_unit
         )
 
+    def order_to_quote_lots(self, base_lots, price_in_ticks):
+        return (
+            base_lots
+            * price_in_ticks
+            * self.tick_size_in_quote_atoms_per_base_unit
+            // (self.num_base_lots_per_base_unit * self.quote_atoms_per_quote_lot)
+        )
+
     def create_place_limit_order_instruction(
         self, limit_order_packet: Union[Limit, PostOnly], trader_pubkey: Pubkey
     ) -> Instruction:

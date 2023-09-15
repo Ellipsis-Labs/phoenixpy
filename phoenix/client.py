@@ -1,9 +1,14 @@
 import asyncio
-from typing import Any, Callable, Dict, Tuple, TypedDict, Union, List
+import traceback
+from dataclasses import dataclass
+import base58
+import json
+from typing import Any, Callable, Dict, Iterator, Tuple, TypedDict, Union, List
 from uuid import uuid4
 import time
 import traceback
 from asyncstdlib import enumerate
+import websockets
 from phoenix.instructions import cancel_all_orders, withdraw_funds
 from phoenix.instructions import cancel_multiple_orders_by_id
 from phoenix.instructions import cancel_all_orders_with_free_funds
@@ -26,6 +31,13 @@ from phoenix.instructions.cancel_multiple_orders_by_id_with_free_funds import (
     CancelMultipleOrdersByIdWithFreeFundsArgs,
 )
 from phoenix.market_metadata import MarketMetadata
+from phoenix.order_subscribe_response import (
+    CancelledOrder,
+    FilledOrder,
+    OpenOrder,
+    OrderSubscribeError,
+    OrderSubscribeResponse,
+)
 from phoenix.program_id import PROGRAM_ID
 from phoenix.types import self_trade_behavior
 from phoenix.types.cancel_multiple_orders_by_id_params import (
@@ -42,8 +54,12 @@ from phoenix.types.order_packet import (
     PostOnlyValue,
 )
 from spl.token.instructions import get_associated_token_address
-from phoenix.types.side import Ask, Bid, SideKind
-from phoenix.events import get_phoenix_events_from_confirmed_transaction_with_meta
+from phoenix.types.side import Ask, Bid, SideKind, from_order_sequence_number
+from phoenix.events import (
+    PhoenixTransaction,
+    get_phoenix_events_from_confirmed_transaction_with_meta,
+    get_phoenix_events_from_log_data,
+)
 from solana.rpc.commitment import Commitment
 from solana.rpc.async_api import AsyncClient
 from solana.rpc.types import TxOpts
@@ -54,7 +70,7 @@ from solana.transaction import Instruction, Transaction, Keypair
 from solana.rpc.websocket_api import connect
 from phoenix.types.fifo_order_id import FIFOOrderId
 from phoenix.types.withdraw_params import WithdrawParams
-
+from jsonrpcclient import request
 
 from .market import DEFAULT_L2_LADDER_DEPTH, Ladder, Market
 
@@ -145,6 +161,224 @@ class PhoenixClient:
         )
         unix_timestamp = (await self.client.get_block_time(slot)).value
         return market.get_ui_ladder(slot, unix_timestamp, levels)
+
+    async def order_subscribe(
+        self, market_pubkey: Pubkey, trader_pubkey: Pubkey
+    ) -> Iterator[List[OrderSubscribeResponse]]:
+        error_count = 0
+        reconnection_count = 0
+        while True:
+            reconnection_count += 1
+            async with websockets.connect(self.ws_endpoint + "/whirligig") as websocket:
+                try:
+                    transaction_subscribe = request(
+                        "transactionSubscribe",
+                        params=[
+                            {
+                                "mentions": [str(market_pubkey)],
+                                "failed": False,
+                                "vote": False,
+                            },
+                            {
+                                "commitment": "confirmed",
+                            },
+                        ],
+                    )
+                    await websocket.send(json.dumps(transaction_subscribe))
+                    # Ignore the first message
+                    await websocket.recv()
+                    while True:
+                        try:
+                            response = self.__process_transaction_event(
+                                json.loads(await websocket.recv()),
+                                market_pubkey,
+                                trader_pubkey,
+                            )
+                            if len(response) > 0:
+                                yield response
+                        except websockets.exceptions.ConnectionClosed as e:
+                            print("Connection closed unexpectedly. Reconnecting...")
+                            err = OrderSubscribeError(
+                                message="Websocked connection closed",
+                                error_count=error_count,
+                                reconnection_count=reconnection_count,
+                                reconnected=True,
+                                traceback=traceback.extract_stack(),
+                                exception=e,
+                            )
+                            yield [err]
+                            error_count += 1
+                            break
+                        except Exception as e:
+                            err = OrderSubscribeError(
+                                message=f"Error processing transaction event: {e}",
+                                error_count=error_count,
+                                reconnection_count=reconnection_count,
+                                reconnected=False,
+                                traceback=traceback.extract_stack(),
+                                exception=e,
+                            )
+                            yield [err]
+                            error_count += 1
+
+                except Exception as e:
+                    err = OrderSubscribeError(
+                        message=f"Error processing transaction event: {e}",
+                        error_count=error_count,
+                        reconnection_count=reconnection_count,
+                        reconnected=False,
+                        traceback=traceback.extract_stack(),
+                        exception=e,
+                    )
+                    yield [err]
+                    error_count += 1
+
+    def __process_transaction_event(
+        self, response, market_pubkey: Pubkey, trader_pubkey: Pubkey
+    ) -> [OrderSubscribeResponse]:
+        payload = response["params"]["result"]["value"]
+        meta = payload["meta"]
+        loaded_addresses = meta.get("loadedAddresses", {"readonly": [], "writable": []})
+        message = payload["transaction"]["message"][-1]
+        base_account_keys = list(
+            map(
+                lambda l: Pubkey.from_bytes(bytes(l)),
+                message["accountKeys"][1:],
+            )
+        )
+        lookup_table_keys = list(
+            map(
+                Pubkey.from_string,
+                loaded_addresses["writable"] + loaded_addresses["readonly"],
+            )
+        )
+        account_keys = base_account_keys + lookup_table_keys
+        data_array: List[bytes] = []
+        for inner_ix in meta["innerInstructions"]:
+            for ix in inner_ix["instructions"]:
+                program = account_keys[ix["programIdIndex"]]
+                if program != PROGRAM_ID:
+                    continue
+                data = base58.b58decode(ix["data"])
+                if data[0] == 15:
+                    data_array.append(data[1:])
+
+        instructions = [get_phoenix_events_from_log_data(data) for data in data_array]
+
+        phoenix_tx = PhoenixTransaction(
+            instructions,
+            signature=Signature.from_bytes(payload["transaction"]["signatures"][1]),
+            txReceived=True,
+            txFailed=False,
+        )
+        response = []
+
+        for event in phoenix_tx.events_from_instructions:
+            header = event.header
+            if header.market != market_pubkey:
+                continue
+            for e in event.events:
+                if e.kind == "Fill":
+                    fill = e.value[0]
+                    if fill.maker_id == trader_pubkey:
+                        filled_order = FilledOrder(
+                            order_id=FIFOOrderId(
+                                order_sequence_number=fill.order_sequence_number,
+                                price_in_ticks=fill.price_in_ticks,
+                            ),
+                            market_pubkey=market_pubkey,
+                            slot=header.slot,
+                            unix_timestamp_in_seconds=header.timestamp,
+                            sequence_number=header.sequence_number,
+                            taker_side=from_order_sequence_number(
+                                fill.order_sequence_number
+                            ).opposite(),
+                            base_lots_filled=fill.base_lots_filled,
+                            base_lots_remaining=fill.base_lots_remaining,
+                            taker_pubkey=header.signer,
+                            maker_pubkey=fill.maker_id,
+                        )
+                        response.append(filled_order)
+                elif e.kind == "Place":
+                    place = e.value[0]
+                    if header.signer == trader_pubkey:
+                        open_order = OpenOrder(
+                            order_id=FIFOOrderId(
+                                order_sequence_number=place.order_sequence_number,
+                                price_in_ticks=place.price_in_ticks,
+                            ),
+                            market_pubkey=market_pubkey,
+                            slot=header.slot,
+                            unix_timestamp_in_seconds=header.timestamp,
+                            sequence_number=header.sequence_number,
+                            side=from_order_sequence_number(
+                                place.order_sequence_number
+                            ),
+                            base_lots_placed=place.base_lots_placed,
+                            maker_pubkey=trader_pubkey,
+                        )
+                        response.append(open_order)
+                elif e.kind == "Reduce":
+                    reduce = e.value[0]
+                    if header.signer == trader_pubkey:
+                        cancelled_order = CancelledOrder(
+                            order_id=FIFOOrderId(
+                                order_sequence_number=reduce.order_sequence_number,
+                                price_in_ticks=reduce.price_in_ticks,
+                            ),
+                            market_pubkey=market_pubkey,
+                            slot=header.slot,
+                            unix_timestamp_in_seconds=header.timestamp,
+                            sequence_number=header.sequence_number,
+                            side=from_order_sequence_number(
+                                reduce.order_sequence_number
+                            ),
+                            base_lots_removed=reduce.base_lots_removed,
+                            base_lots_remaining=reduce.base_lots_remaining,
+                            maker_pubkey=trader_pubkey,
+                        )
+                        response.append(cancelled_order)
+                elif e.kind == "ExpiredOrder":
+                    expired = e.value[0]
+                    if header.signer == trader_pubkey:
+                        cancelled_order = CancelledOrder(
+                            order_id=FIFOOrderId(
+                                order_sequence_number=expired.order_sequence_number,
+                                price_in_ticks=expired.price_in_ticks,
+                            ),
+                            market_pubkey=market_pubkey,
+                            slot=header.slot,
+                            unix_timestamp_in_seconds=header.timestamp,
+                            sequence_number=header.sequence_number,
+                            side=from_order_sequence_number(
+                                expired.order_sequence_number
+                            ),
+                            base_lots_removed=expired.base_lots_removed,
+                            base_lots_remaining=0,
+                            maker_pubkey=trader_pubkey,
+                        )
+                        response.append(cancelled_order)
+                elif e.kind == "Evict":
+                    evicted = e.value[0]
+                    if header.signer == trader_pubkey:
+                        cancelled_order = CancelledOrder(
+                            order_id=FIFOOrderId(
+                                order_sequence_number=evicted.order_sequence_number,
+                                price_in_ticks=evicted.price_in_ticks,
+                            ),
+                            market_pubkey=market_pubkey,
+                            slot=header.slot,
+                            unix_timestamp_in_seconds=header.timestamp,
+                            sequence_number=header.sequence_number,
+                            side=from_order_sequence_number(
+                                evicted.order_sequence_number
+                            ),
+                            base_lots_removed=evicted.base_lots_evicted,
+                            base_lots_remaining=0,
+                            maker_pubkey=trader_pubkey,
+                        )
+                        response.append(cancelled_order)
+        return response
 
     async def market_subscribe(
         self, market_pubkey: Pubkey, handle_market: Callable[[Market], Any]

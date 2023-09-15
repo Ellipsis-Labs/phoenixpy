@@ -1,4 +1,4 @@
-from typing import List, Tuple, Set, Any
+from typing import List, Optional, Tuple, Set, Any
 import struct
 
 from typing import List, Tuple, Dict
@@ -246,6 +246,28 @@ class Market:
                 self.asks[:levels],
             )
         )
+
+    def get_orders_for_trader(
+        self, trader: Pubkey
+    ) -> Tuple[
+        List[Tuple[FIFOOrderId, FIFORestingOrder]],  # bids
+        List[Tuple[FIFOOrderId, FIFORestingOrder]],  # asks
+    ]:
+        trader_index = self.trader_pubkey_to_trader_index.get(trader)
+        if trader_index is None:
+            return ([], [])
+        bid_orders = []
+        for bid in self.bids:
+            if bid[1].trader_index == trader_index:
+                bid_orders.append(bid)
+        ask_orders = []
+        for ask in self.asks:
+            if ask[1].trader_index == trader_index:
+                ask_orders.append(ask)
+        return (bid_orders, ask_orders)
+
+    def get_trader_state(self, trader: Pubkey) -> Optional[TraderState]:
+        return self.traders.get(trader)
 
     def get_ladder(
         self,

@@ -64,3 +64,13 @@ class FIFORestingOrder:
                 "last_valid_unix_timestamp_in_seconds"
             ],
         )
+
+    def __hash__(self) -> int:
+        return hash(
+            (
+                self.trader_index,
+                self.num_base_lots,
+                self.last_valid_slot,
+                self.last_valid_unix_timestamp_in_seconds,
+            )
+        )

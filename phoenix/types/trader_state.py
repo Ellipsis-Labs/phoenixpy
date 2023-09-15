@@ -69,3 +69,11 @@ class TraderState:
             base_lots_free=obj["base_lots_free"],
             padding=obj["padding"],
         )
+
+    def __eq__(self, other: TraderState) -> bool:
+        return (
+            self.quote_lots_locked == other.quote_lots_locked
+            and self.quote_lots_free == other.quote_lots_free
+            and self.base_lots_locked == other.base_lots_locked
+            and self.base_lots_free == other.base_lots_free
+        )

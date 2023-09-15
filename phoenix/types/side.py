@@ -30,6 +30,12 @@ class Bid:
             "Bid": {},
         }
 
+    def __repr__(self) -> str:
+        return "Bid"
+
+    def opposite(self) -> Ask:
+        return Ask()
+
 
 @dataclass
 class Ask:
@@ -47,6 +53,12 @@ class Ask:
         return {
             "Ask": {},
         }
+
+    def __repr__(self) -> str:
+        return "Ask"
+
+    def opposite(self) -> Bid:
+        return Bid()
 
 
 SideKind = typing.Union[Bid, Ask]
@@ -70,6 +82,13 @@ def from_json(obj: SideJSON) -> SideKind:
         return Ask()
     kind = obj["kind"]
     raise ValueError(f"Unrecognized enum kind: {kind}")
+
+
+def from_order_sequence_number(order_sequence_number: int) -> SideKind:
+    if order_sequence_number & 1 << 63 != 0:
+        return Bid()
+    else:
+        return Ask()
 
 
 layout = EnumForCodegen("Bid" / borsh.CStruct(), "Ask" / borsh.CStruct())
