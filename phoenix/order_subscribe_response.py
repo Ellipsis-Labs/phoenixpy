@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from traceback import StackSummary
-from typing import Union
+from typing import Optional, Union
 
 from phoenix.types.fifo_order_id import FIFOOrderId
 from phoenix.types.side import Ask, Bid
@@ -52,7 +52,7 @@ class OrderSubscribeError:
     reconnection_count: int
     reconnected: bool
     error_count: int
-    traceback: StackSummary
+    traceback: Optional[StackSummary]
     exception: Exception
 
 

@@ -66,6 +66,7 @@ from solana.rpc.types import TxOpts
 from solders.pubkey import Pubkey
 from solders.hash import Hash
 from solders.signature import Signature
+from solders.rpc.config import RpcTransactionLogsFilterMentions
 from solana.transaction import Instruction, Transaction, Keypair
 from solana.rpc.websocket_api import connect
 from phoenix.types.fifo_order_id import FIFOOrderId
@@ -161,6 +162,85 @@ class PhoenixClient:
         )
         unix_timestamp = (await self.client.get_block_time(slot)).value
         return market.get_ui_ladder(slot, unix_timestamp, levels)
+
+    async def order_subscribe_with_default_client(
+        self, market_pubkey: Pubkey, trader_pubkey: Pubkey
+    ) -> Iterator[List[OrderSubscribeResponse]]:
+        error_count = 0
+        reconnection_count = 0
+        while True:
+            reconnection_count += 1
+            async with connect(self.ws_endpoint) as websocket:
+                await websocket.logs_subscribe(
+                    commitment=self.commitment,
+                    filter_=RpcTransactionLogsFilterMentions(PROGRAM_ID),
+                )
+                await websocket.recv()
+                async for msg in websocket:
+                    if msg[0].result.value.err != None:
+                        continue
+                    try:
+                        sig = msg[0].result.value.signature
+                        transaction = None
+                        attempts = 0
+                        while transaction is None and attempts < 5:
+                            attempts += 1
+                            tx_response = await self.client.get_transaction(
+                                sig,
+                                "json",
+                                self.commitment,
+                                max_supported_transaction_version=1,
+                            )
+                            transaction = tx_response.value
+                        if transaction is None:
+                            error_count += 1
+                            yield (
+                                [
+                                    OrderSubscribeError(
+                                        message=f"Transaction not found: {sig}",
+                                        error_count=error_count,
+                                        reconnection_count=reconnection_count,
+                                        reconnected=False,
+                                        traceback=None,
+                                        exception=None,
+                                    )
+                                ]
+                            )
+                            continue
+                        phoenix_transaction = (
+                            get_phoenix_events_from_confirmed_transaction_with_meta(
+                                transaction
+                            )
+                        )
+                        response = self.__get_response_from_phoenix_transaction(
+                            phoenix_transaction, market_pubkey, trader_pubkey
+                        )
+                        if len(response) > 0:
+                            yield response
+                    except websockets.exceptions.ConnectionClosed as e:
+                        print("Connection closed unexpectedly. Reconnecting...")
+                        err = OrderSubscribeError(
+                            message="Websocked connection closed",
+                            error_count=error_count,
+                            reconnection_count=reconnection_count,
+                            reconnected=True,
+                            traceback=traceback.extract_stack(),
+                            exception=e,
+                        )
+                        yield [err]
+                        error_count += 1
+                        break
+                    except Exception as e:
+                        err = OrderSubscribeError(
+                            message=f"Error processing transaction event: {e}",
+                            error_count=error_count,
+                            reconnection_count=reconnection_count,
+                            reconnected=False,
+                            traceback=traceback.extract_stack(),
+                            exception=e,
+                        )
+                        yield [err]
+                        error_count += 1
 
     async def order_subscribe(
         self, market_pubkey: Pubkey, trader_pubkey: Pubkey
@@ -271,8 +351,14 @@ class PhoenixClient:
             txReceived=True,
             txFailed=False,
         )
-        response = []
+        return self.__get_response_from_phoenix_transaction(
+            phoenix_tx, market_pubkey=market_pubkey, trader_pubkey=trader_pubkey
+        )
 
+    def __get_response_from_phoenix_transaction(
+        self, phoenix_tx, market_pubkey, trader_pubkey
+    ):
+        response = []
         for event in phoenix_tx.events_from_instructions:
             header = event.header
             if header.market != market_pubkey:
