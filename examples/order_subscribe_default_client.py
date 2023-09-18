@@ -34,12 +34,12 @@ async def main():
         market, trader
     ):
         for event in event_packet:
-            if isinstance(event, OpenOrder):
-                print("place", event)
+            # if isinstance(event, OpenOrder):
+            #     print("place", event)
             if isinstance(event, FilledOrder):
                 print("fill", event)
-            if isinstance(event, CancelledOrder):
-                print("cancel", event)
+            # if isinstance(event, CancelledOrder):
+            #     print("cancel", event)
             if isinstance(event, OrderSubscribeError):
                 print("error", event)
 

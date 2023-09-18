@@ -189,7 +189,7 @@ class PhoenixClient:
                                 sig,
                                 "json",
                                 self.commitment,
-                                max_supported_transaction_version=1,
+                                max_supported_transaction_version=0,
                             )
                             transaction = tx_response.value
                         if transaction is None:
@@ -940,7 +940,7 @@ class PhoenixClient:
         signature = response.value
         await self.client.confirm_transaction(signature, commitment)
         transaction_response = await self.client.get_transaction(
-            signature, "json", commitment
+            signature, "json", commitment, 0
         )
         transaction = transaction_response.value
         phoenix_transaction = get_phoenix_events_from_confirmed_transaction_with_meta(

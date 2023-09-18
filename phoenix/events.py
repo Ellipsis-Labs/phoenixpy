@@ -60,15 +60,14 @@ def get_phoenix_events_from_confirmed_transaction_with_meta(
         return PhoenixTransaction([], txReceived=True, txFailed=True)
 
     data_array: List[bytes] = []
+    account_keys = tx_data.transaction.transaction.message.account_keys
+    if meta.loaded_addresses is not None:
+        account_keys += meta.loaded_addresses.writable
+        account_keys += meta.loaded_addresses.readonly
 
     for ix in inner_ixs:
         for inner in ix.instructions:
-            if (
-                tx_data.transaction.transaction.message.account_keys[
-                    inner.program_id_index
-                ]
-                != PROGRAM_ID
-            ):
+            if account_keys[inner.program_id_index] != PROGRAM_ID:
                 continue
             raw_data = base58.b58decode(inner.data)
             if raw_data[0] == LOG_INSTRUCTION_DISCRIMINATOR:
