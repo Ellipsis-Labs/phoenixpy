@@ -65,3 +65,13 @@ class FIFOOrderId:
                 return self.order_sequence_number > other.order_sequence_number
             else:
                 return self.price_in_ticks > other.price_in_ticks
+
+    def to_int(self) -> int:
+        return self.price_in_ticks << 64 | self.order_sequence_number
+
+    @classmethod
+    def from_int(cls, order_id) -> "FIFOOrderId":
+        return FIFOOrderId(
+            price_in_ticks=order_id >> 64,
+            order_sequence_number=order_id & 0xFFFFFFFFFFFFFFFF,
+        )

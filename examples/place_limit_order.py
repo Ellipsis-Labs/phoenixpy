@@ -56,8 +56,14 @@ async def main():
     )
     print("Order Id Map: ", order_ids_map)
 
-    orders_to_cancel = list(order_ids_map.values())
-    print("Orders to cancel: ", orders_to_cancel)
+    orders_to_cancel = list(
+        map(lambda x: x.order_id, order_ids_map.client_orders_map.values())
+    )
+    fifo_orders_to_cancel = list(
+        map(lambda x: x.exchange_order_id, order_ids_map.client_orders_map.values())
+    )
+    print("Order IDs to cancel (numeric): ", orders_to_cancel)
+    print("Order IDs to cancel (structured): ", fifo_orders_to_cancel)
 
     # Cancel orders
     cancelled_orders = await client.cancel_orders(
@@ -70,7 +76,7 @@ async def main():
 
     # Cancel all orders
     print("Cancelling all orders")
-    cancelled_orders = await client.cancel_orders(
+    cancelled_orders = await client.cancel_all_orders(
         signer,
         solusdc_market_pubkey,
     )

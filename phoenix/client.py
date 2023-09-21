@@ -89,10 +89,11 @@ class ExecutableOrder:
 class PhoenixOrder:
     def __init__(
         self,
-        order_id: FIFOOrderId,
+        exchange_order_id: FIFOOrderId,
         base_lots_remaining: int,
     ):
-        self.order_id = order_id
+        self.exchange_order_id = exchange_order_id
+        self.order_id = exchange_order_id.to_int()
         self.base_lots_remaining = base_lots_remaining
 
     def __repr__(self):
@@ -811,7 +812,7 @@ class PhoenixClient:
         self,
         trader: Pubkey,
         market_pubkey: Pubkey,
-        order_ids: Union[List[FIFOOrderId], None] = None,
+        order_ids: Union[List[Union[FIFOOrderId, int]], None] = None,
         withdraw_funds=True,
     ) -> Instruction:
         log_account = Pubkey.find_program_address([b"log"], PROGRAM_ID)[0]
@@ -845,6 +846,10 @@ class PhoenixClient:
                 return cancel_all_orders_with_free_funds(accounts)
 
         else:
+            order_ids = [
+                FIFOOrderId.from_int(o) if isinstance(o, int) else o for o in order_ids
+            ]
+            print(order_ids)
             orders = [
                 CancelOrderParams(
                     side=Bid if (order_id.order_sequence_number & 1 << 63 > 0) else Ask,
@@ -885,11 +890,32 @@ class PhoenixClient:
                 )
                 return cancel_multiple_orders_by_id_with_free_funds(args, accounts)
 
+    async def cancel_order(
+        self,
+        signer: Keypair,
+        market_pubkey: Pubkey,
+        order_id: Union[FIFOOrderId, int],
+        **kwargs,
+    ) -> Tuple[Signature, List[FIFOOrderId]]:
+        return await self.cancel_orders(
+            signer=signer, market_pubkey=market_pubkey, order_ids=[order_id], **kwargs
+        )
+
+    async def cancel_all_orders(
+        self,
+        signer: Keypair,
+        market_pubkey: Pubkey,
+        **kwargs,
+    ) -> Tuple[Signature, List[FIFOOrderId]]:
+        return await self.cancel_orders(
+            signer=signer, market_pubkey=market_pubkey, order_ids=None, **kwargs
+        )
+
     async def cancel_orders(
         self,
         signer: Keypair,
         market_pubkey: Pubkey,
-        order_ids: Union[List[FIFOOrderId], None] = None,
+        order_ids: Union[List[Union[FIFOOrderId, int]], None] = None,
         withdraw_cancelled_funds=True,
         withdraw_free_funds=False,
         commitment=None,
