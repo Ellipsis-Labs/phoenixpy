@@ -215,6 +215,8 @@ class PhoenixClient:
     ) -> Iterator[List[OrderSubscribeResponse]]:
         error_count = 0
         reconnection_count = 0
+        if market_pubkey not in self.markets:
+            await self.add_market(market_pubkey)
         while True:
             reconnection_count += 1
             async with connect(self.ws_endpoint) as websocket:
@@ -294,6 +296,8 @@ class PhoenixClient:
     ) -> Iterator[List[OrderSubscribeResponse]]:
         error_count = 0
         reconnection_count = 0
+        if market_pubkey not in self.markets:
+            await self.add_market(market_pubkey)
         while True:
             reconnection_count += 1
             async with websockets.connect(self.ws_endpoint + "/whirligig") as websocket:
@@ -405,6 +409,7 @@ class PhoenixClient:
     def __get_response_from_phoenix_transaction(
         self, phoenix_tx, market_pubkey, trader_pubkey
     ):
+        meta: MarketMetadata = self.markets[market_pubkey]
         response = []
         for event in phoenix_tx.events_from_instructions:
             header = event.header
@@ -418,8 +423,14 @@ class PhoenixClient:
                             order_sequence_number=fill.order_sequence_number,
                             price_in_ticks=fill.price_in_ticks,
                         )
+                        price = meta.ticks_to_float_price(fill.price_in_ticks)
+                        quantity_filled = meta.base_lots_to_raw_base_units_as_float(
+                            fill.base_lots_filled
+                        )
+                        quantity_remaining = meta.base_lots_to_raw_base_units_as_float(
+                            fill.base_lots_remaining
+                        )
                         filled_order = FilledOrder(
-                            exchange_order_id=fifo_order_id,
                             order_id=fifo_order_id.to_int(),
                             market_pubkey=market_pubkey,
                             slot=header.slot,
@@ -428,8 +439,12 @@ class PhoenixClient:
                             taker_side=from_order_sequence_number(
                                 fill.order_sequence_number
                             ).opposite(),
-                            base_lots_filled=fill.base_lots_filled,
-                            base_lots_remaining=fill.base_lots_remaining,
+                            price=price,
+                            quantity_filled=quantity_filled,
+                            quantity_remaining=quantity_remaining,
+                            price_str=str(price),
+                            quantity_filled_str=str(quantity_filled),
+                            quantity_remaining_str=str(quantity_remaining),
                             taker_pubkey=header.signer,
                             maker_pubkey=fill.maker_id,
                         )
@@ -441,8 +456,11 @@ class PhoenixClient:
                             order_sequence_number=place.order_sequence_number,
                             price_in_ticks=place.price_in_ticks,
                         )
+                        price = meta.ticks_to_float_price(place.price_in_ticks)
+                        quantity_placed = meta.base_lots_to_raw_base_units_as_float(
+                            place.base_lots_placed
+                        )
                         open_order = OpenOrder(
-                            exchange_order_id=fifo_order_id,
                             order_id=fifo_order_id.to_int(),
                             market_pubkey=market_pubkey,
                             slot=header.slot,
@@ -451,7 +469,10 @@ class PhoenixClient:
                             side=from_order_sequence_number(
                                 place.order_sequence_number
                             ),
-                            base_lots_placed=place.base_lots_placed,
+                            price=price,
+                            quantity_placed=quantity_placed,
+                            price_str=str(price),
+                            quantity_placed_str=str(quantity_placed),
                             maker_pubkey=trader_pubkey,
                         )
                         response.append(open_order)
@@ -462,8 +483,14 @@ class PhoenixClient:
                             order_sequence_number=reduce.order_sequence_number,
                             price_in_ticks=reduce.price_in_ticks,
                         )
+                        price = meta.ticks_to_float_price(reduce.price_in_ticks)
+                        quantity_remaining = meta.base_lots_to_raw_base_units_as_float(
+                            reduce.base_lots_remaining
+                        )
+                        quantity_removed = meta.base_lots_to_raw_base_units_as_float(
+                            reduce.base_lots_removed
+                        )
                         cancelled_order = CancelledOrder(
-                            exchange_order_id=fifo_order_id,
                             order_id=fifo_order_id.to_int(),
                             market_pubkey=market_pubkey,
                             slot=header.slot,
@@ -472,8 +499,12 @@ class PhoenixClient:
                             side=from_order_sequence_number(
                                 reduce.order_sequence_number
                             ),
-                            base_lots_removed=reduce.base_lots_removed,
-                            base_lots_remaining=reduce.base_lots_remaining,
+                            price=price,
+                            quantity_remaining=quantity_remaining,
+                            quantity_removed=quantity_removed,
+                            price_str=str(price),
+                            quantity_remaining_str=str(quantity_remaining),
+                            quantity_removed_str=str(quantity_removed),
                             maker_pubkey=trader_pubkey,
                         )
                         response.append(cancelled_order)
@@ -484,8 +515,14 @@ class PhoenixClient:
                             order_sequence_number=expired.order_sequence_number,
                             price_in_ticks=expired.price_in_ticks,
                         )
+                        price = meta.ticks_to_float_price(expired.price_in_ticks)
+                        quantity_remaining = meta.base_lots_to_raw_base_units_as_float(
+                            expired.base_lots_remaining
+                        )
+                        quantity_removed = meta.base_lots_to_raw_base_units_as_float(
+                            expired.base_lots_removed
+                        )
                         cancelled_order = CancelledOrder(
-                            exchange_order_id=fifo_order_id,
                             order_id=fifo_order_id.to_int(),
                             market_pubkey=market_pubkey,
                             slot=header.slot,
@@ -494,8 +531,12 @@ class PhoenixClient:
                             side=from_order_sequence_number(
                                 expired.order_sequence_number
                             ),
-                            base_lots_removed=expired.base_lots_removed,
-                            base_lots_remaining=0,
+                            price=price,
+                            quantity_remaining=quantity_remaining,
+                            quantity_removed=quantity_removed,
+                            price_str=str(price),
+                            quantity_remaining_str=str(quantity_remaining),
+                            quantity_removed_str=str(quantity_removed),
                             maker_pubkey=trader_pubkey,
                         )
                         response.append(cancelled_order)
@@ -506,8 +547,14 @@ class PhoenixClient:
                             order_sequence_number=evicted.order_sequence_number,
                             price_in_ticks=evicted.price_in_ticks,
                         )
+                        price = meta.ticks_to_float_price(evicted.price_in_ticks)
+                        quantity_remaining = meta.base_lots_to_raw_base_units_as_float(
+                            evicted.base_lots_remaining
+                        )
+                        quantity_removed = meta.base_lots_to_raw_base_units_as_float(
+                            evicted.base_lots_removed
+                        )
                         cancelled_order = CancelledOrder(
-                            exchange_order_id=fifo_order_id,
                             order_id=fifo_order_id.to_int(),
                             market_pubkey=market_pubkey,
                             slot=header.slot,
@@ -516,8 +563,12 @@ class PhoenixClient:
                             side=from_order_sequence_number(
                                 evicted.order_sequence_number
                             ),
-                            base_lots_removed=evicted.base_lots_evicted,
-                            base_lots_remaining=0,
+                            price=price,
+                            quantity_remaining=quantity_remaining,
+                            quantity_removed=quantity_removed,
+                            price_str=str(price),
+                            quantity_remaining_str=str(quantity_remaining),
+                            quantity_removed_str=str(quantity_removed),
                             maker_pubkey=trader_pubkey,
                         )
                         response.append(cancelled_order)
