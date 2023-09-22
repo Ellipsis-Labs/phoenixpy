@@ -6,7 +6,7 @@ import requests
 from phoenix.client import PhoenixClient
 from solders.pubkey import Pubkey
 from solders.keypair import Keypair
-from phoenix.types.side import Bid
+from phoenix.types.side import Ask, Bid
 
 
 async def main():
@@ -48,11 +48,14 @@ async def main():
     limit_order_packet_two = client.get_limit_order_packet(
         solusdc_market_pubkey, Bid, price * 0.97, 0.01
     )
+    limit_order_packet_three = client.get_limit_order_packet(
+        solusdc_market_pubkey, Ask, price * 1.03, 0.01
+    )
 
     # Execute order packets; returns a map of client_order_id to FIFOOrderId of orders that were executed
     order_ids_map = await client.send_orders(
         signer,
-        [limit_order_packet, limit_order_packet_two],
+        [limit_order_packet, limit_order_packet_two, limit_order_packet_three],
     )
     print("Order Id Map: ", order_ids_map)
 
@@ -64,6 +67,29 @@ async def main():
     )
     print("Order IDs to cancel (numeric): ", orders_to_cancel)
     print("Order IDs to cancel (structured): ", fifo_orders_to_cancel)
+
+    print(
+        "All orders",
+        await client.get_active_orders(
+            market_pubkey=solusdc_market_pubkey, trader_pubkey=signer.pubkey()
+        ),
+    )
+    print(
+        "Bid orders",
+        await client.get_active_orders(
+            market_pubkey=solusdc_market_pubkey,
+            trader_pubkey=signer.pubkey(),
+            side="bid",
+        ),
+    )
+    print(
+        "Ask orders",
+        await client.get_active_orders(
+            market_pubkey=solusdc_market_pubkey,
+            trader_pubkey=signer.pubkey(),
+            side="ask",
+        ),
+    )
 
     # Cancel orders
     cancelled_orders = await client.cancel_orders(

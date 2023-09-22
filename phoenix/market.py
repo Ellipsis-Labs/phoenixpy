@@ -15,6 +15,18 @@ from decimal import Decimal
 DEFAULT_L2_LADDER_DEPTH = 10
 
 
+@dataclass
+class ActiveOrder:
+    exchange_order_id: FIFOOrderId
+    order_id: int
+    market: Pubkey
+    side: str
+    price: Decimal
+    price_in_ticks: int
+    remaining_size: Decimal
+    remaining_size_in_base_lots: int
+
+
 class LadderLevel:
     price_in_ticks: Decimal
     size_in_base_lots: Decimal
@@ -265,6 +277,41 @@ class Market:
             if ask[1].trader_index == trader_index:
                 ask_orders.append(ask)
         return (bid_orders, ask_orders)
+
+    def get_active_orders(self, trader: Pubkey) -> List[ActiveOrder]:
+        bid_orders, ask_orders = self.get_orders_for_trader(trader)
+        active_orders = []
+        for order_id, resting_order in bid_orders:
+            active_orders.append(
+                ActiveOrder(
+                    exchange_order_id=order_id,
+                    order_id=order_id.to_int(),
+                    market=self.address,
+                    side="buy",
+                    price=self.metadata.ticks_to_float_price(order_id.price_in_ticks),
+                    price_in_ticks=order_id.price_in_ticks,
+                    remaining_size=self.metadata.base_lots_to_raw_base_units_as_float(
+                        resting_order.num_base_lots
+                    ),
+                    remaining_size_in_base_lots=resting_order.num_base_lots,
+                )
+            )
+        for order_id, resting_order in ask_orders:
+            active_orders.append(
+                ActiveOrder(
+                    exchange_order_id=order_id,
+                    order_id=order_id.to_int(),
+                    market=self.address,
+                    side="sell",
+                    price=self.metadata.ticks_to_float_price(order_id.price_in_ticks),
+                    price_in_ticks=order_id.price_in_ticks,
+                    remaining_size=self.metadata.base_lots_to_raw_base_units_as_float(
+                        resting_order.num_base_lots
+                    ),
+                    remaining_size_in_base_lots=resting_order.num_base_lots,
+                )
+            )
+        return active_orders
 
     def get_trader_state(self, trader: Pubkey) -> Optional[TraderState]:
         return self.traders.get(trader)
