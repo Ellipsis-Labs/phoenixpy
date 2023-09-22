@@ -10,7 +10,6 @@ from solders.pubkey import Pubkey
 
 @dataclass
 class FilledOrder:
-    exchange_order_id: FIFOOrderId
     order_id: int
     market_pubkey: Pubkey
     sequence_number: int
@@ -20,15 +19,15 @@ class FilledOrder:
     price: Decimal
     quantity_filled: Decimal
     quantity_remaining: Decimal
-    base_lots_filled: int
-    base_lots_remaining: int
+    price_str: str
+    quantity_filled_str: str
+    quantity_remaining_str: str
     taker_pubkey: Pubkey
     maker_pubkey: Pubkey
 
 
 @dataclass
 class OpenOrder:
-    exchange_order_id: FIFOOrderId
     order_id: int
     market_pubkey: Pubkey
     sequence_number: int
@@ -36,15 +35,15 @@ class OpenOrder:
     side: Union[Bid, Ask]
     price: Decimal
     quantity_placed: Decimal
+    price_str: str
+    quantity_placed_str: str
     unix_timestamp_in_seconds: int
     side: Union[Bid, Ask]
-    base_lots_placed: int
     maker_pubkey: Pubkey
 
 
 @dataclass
 class CancelledOrder:
-    exchange_order_id: FIFOOrderId
     order_id: int
     market_pubkey: Pubkey
     sequence_number: int
@@ -54,8 +53,9 @@ class CancelledOrder:
     price: Decimal
     quantity_removed: Decimal
     quantity_remaining: Decimal
-    base_lots_removed: int
-    base_lots_remaining: int
+    price_str: str
+    quantity_removed_str: str
+    quantity_remaining_str: str
     maker_pubkey: Pubkey
 
 
