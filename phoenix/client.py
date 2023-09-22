@@ -73,7 +73,7 @@ from phoenix.types.fifo_order_id import FIFOOrderId
 from phoenix.types.withdraw_params import WithdrawParams
 from jsonrpcclient import request
 
-from .market import DEFAULT_L2_LADDER_DEPTH, Ladder, Market
+from .market import DEFAULT_L2_LADDER_DEPTH, ActiveOrder, Ladder, Market
 
 
 class ExecutableOrder:
@@ -163,6 +163,52 @@ class PhoenixClient:
         )
         unix_timestamp = (await self.client.get_block_time(slot)).value
         return market.get_ui_ladder(slot, unix_timestamp, levels)
+
+    """
+    Returns a list of PhoenixOrders that are active for the given market and trader
+
+    Params:
+    
+    market_pubkey: Pubkey of the market to get orders for
+    trader_pubkey: Pubkey of the trader to get orders for
+    side: SideKind (Bid or Ask) of the orders to get. You may also pass in the strings "buy" | "bid" or "sell" | "ask" (optional)
+    ids: List of order ids (as int) to get. If None, all orders will be returned (optional)
+    market: Market object. If None, the market will be fetched from the client (optional)
+    """
+
+    async def get_active_orders(
+        self,
+        market_pubkey: Pubkey,
+        trader_pubkey: Pubkey,
+        side: SideKind | str | None = None,
+        ids: List[int] | None = None,
+        market: Market | None = None,
+    ) -> List[ActiveOrder]:
+        if side is not None:
+            if isinstance(side, str):
+                side = side.lower().replace("bid", "buy").replace("ask", "sell")
+                if side not in ["buy", "sell"]:
+                    raise Exception(f"Invalid side: {side}")
+            elif side == Bid():
+                side = "buy"
+            elif side == Ask():
+                side == "sell"
+            else:
+                raise Exception(f"Invalid side: {side}")
+        if market is None:
+            market_account = await self.client.get_account_info(
+                market_pubkey, self.commitment, self.encoding
+            )
+            market = Market.deserialize_market_data(
+                market_pubkey, market_account.value.data
+            )
+        active_orders = market.get_active_orders(trader=trader_pubkey)
+        if side is not None:
+            active_orders = list(filter(lambda o: o.side == side, active_orders))
+        if ids is not None:
+            ids = set(ids)
+            active_orders = list(filter(lambda o: o.order_id in ids, active_orders))
+        return active_orders
 
     async def order_subscribe_with_default_client(
         self, market_pubkey: Pubkey, trader_pubkey: Pubkey
@@ -368,11 +414,13 @@ class PhoenixClient:
                 if e.kind == "Fill":
                     fill = e.value[0]
                     if fill.maker_id == trader_pubkey:
+                        fifo_order_id = FIFOOrderId(
+                            order_sequence_number=fill.order_sequence_number,
+                            price_in_ticks=fill.price_in_ticks,
+                        )
                         filled_order = FilledOrder(
-                            order_id=FIFOOrderId(
-                                order_sequence_number=fill.order_sequence_number,
-                                price_in_ticks=fill.price_in_ticks,
-                            ),
+                            exchange_order_id=fifo_order_id,
+                            order_id=fifo_order_id.to_int(),
                             market_pubkey=market_pubkey,
                             slot=header.slot,
                             unix_timestamp_in_seconds=header.timestamp,
@@ -389,11 +437,13 @@ class PhoenixClient:
                 elif e.kind == "Place":
                     place = e.value[0]
                     if header.signer == trader_pubkey:
+                        fifo_order_id = FIFOOrderId(
+                            order_sequence_number=place.order_sequence_number,
+                            price_in_ticks=place.price_in_ticks,
+                        )
                         open_order = OpenOrder(
-                            order_id=FIFOOrderId(
-                                order_sequence_number=place.order_sequence_number,
-                                price_in_ticks=place.price_in_ticks,
-                            ),
+                            exchange_order_id=fifo_order_id,
+                            order_id=fifo_order_id.to_int(),
                             market_pubkey=market_pubkey,
                             slot=header.slot,
                             unix_timestamp_in_seconds=header.timestamp,
@@ -408,11 +458,13 @@ class PhoenixClient:
                 elif e.kind == "Reduce":
                     reduce = e.value[0]
                     if header.signer == trader_pubkey:
+                        fifo_order_id = FIFOOrderId(
+                            order_sequence_number=reduce.order_sequence_number,
+                            price_in_ticks=reduce.price_in_ticks,
+                        )
                         cancelled_order = CancelledOrder(
-                            order_id=FIFOOrderId(
-                                order_sequence_number=reduce.order_sequence_number,
-                                price_in_ticks=reduce.price_in_ticks,
-                            ),
+                            exchange_order_id=fifo_order_id,
+                            order_id=fifo_order_id.to_int(),
                             market_pubkey=market_pubkey,
                             slot=header.slot,
                             unix_timestamp_in_seconds=header.timestamp,
@@ -428,11 +480,13 @@ class PhoenixClient:
                 elif e.kind == "ExpiredOrder":
                     expired = e.value[0]
                     if header.signer == trader_pubkey:
+                        fifo_order_id = FIFOOrderId(
+                            order_sequence_number=expired.order_sequence_number,
+                            price_in_ticks=expired.price_in_ticks,
+                        )
                         cancelled_order = CancelledOrder(
-                            order_id=FIFOOrderId(
-                                order_sequence_number=expired.order_sequence_number,
-                                price_in_ticks=expired.price_in_ticks,
-                            ),
+                            exchange_order_id=fifo_order_id,
+                            order_id=fifo_order_id.to_int(),
                             market_pubkey=market_pubkey,
                             slot=header.slot,
                             unix_timestamp_in_seconds=header.timestamp,
@@ -448,11 +502,13 @@ class PhoenixClient:
                 elif e.kind == "Evict":
                     evicted = e.value[0]
                     if header.signer == trader_pubkey:
+                        fifo_order_id = FIFOOrderId(
+                            order_sequence_number=evicted.order_sequence_number,
+                            price_in_ticks=evicted.price_in_ticks,
+                        )
                         cancelled_order = CancelledOrder(
-                            order_id=FIFOOrderId(
-                                order_sequence_number=evicted.order_sequence_number,
-                                price_in_ticks=evicted.price_in_ticks,
-                            ),
+                            exchange_order_id=fifo_order_id,
+                            order_id=fifo_order_id.to_int(),
                             market_pubkey=market_pubkey,
                             slot=header.slot,
                             unix_timestamp_in_seconds=header.timestamp,

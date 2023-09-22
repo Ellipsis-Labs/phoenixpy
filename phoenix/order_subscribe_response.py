@@ -9,7 +9,8 @@ from solders.pubkey import Pubkey
 
 @dataclass
 class FilledOrder:
-    order_id: FIFOOrderId
+    exchange_order_id: FIFOOrderId
+    order_id: int
     market_pubkey: Pubkey
     sequence_number: int
     slot: int
@@ -23,7 +24,8 @@ class FilledOrder:
 
 @dataclass
 class OpenOrder:
-    order_id: FIFOOrderId
+    exchange_order_id: FIFOOrderId
+    order_id: int
     market_pubkey: Pubkey
     sequence_number: int
     slot: int
@@ -35,7 +37,8 @@ class OpenOrder:
 
 @dataclass
 class CancelledOrder:
-    order_id: FIFOOrderId
+    exchange_order_id: FIFOOrderId
+    order_id: int
     market_pubkey: Pubkey
     sequence_number: int
     slot: int
