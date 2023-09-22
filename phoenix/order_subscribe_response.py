@@ -26,6 +26,7 @@ class FilledOrder:
 @dataclass
 class OpenOrder:
     order_id: int
+    client_order_id: int
     market_pubkey: Pubkey
     sequence_number: int
     slot: int
