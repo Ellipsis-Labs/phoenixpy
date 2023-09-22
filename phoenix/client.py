@@ -373,7 +373,8 @@ class PhoenixClient:
         payload = response["params"]["result"]["value"]
         meta = payload["meta"]
         loaded_addresses = meta.get("loadedAddresses", {"readonly": [], "writable": []})
-        message = payload["transaction"]["message"][-1]
+        tx_message = payload["transaction"]["message"]
+        message = tx_message[-1] if isinstance(tx_message, list) else tx_message
         base_account_keys = list(
             map(
                 lambda l: Pubkey.from_bytes(bytes(l)),
