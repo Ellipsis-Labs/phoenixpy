@@ -92,7 +92,6 @@ class PhoenixOrder:
         exchange_order_id: FIFOOrderId,
         base_lots_remaining: int,
     ):
-        self.exchange_order_id = exchange_order_id
         self.order_id = exchange_order_id.to_int()
         self.base_lots_remaining = base_lots_remaining
 
@@ -442,9 +441,6 @@ class PhoenixClient:
                             price=price,
                             quantity_filled=quantity_filled,
                             quantity_remaining=quantity_remaining,
-                            price_str=str(price),
-                            quantity_filled_str=str(quantity_filled),
-                            quantity_remaining_str=str(quantity_remaining),
                             taker_pubkey=header.signer,
                             maker_pubkey=fill.maker_id,
                         )
@@ -471,8 +467,6 @@ class PhoenixClient:
                             ),
                             price=price,
                             quantity_placed=quantity_placed,
-                            price_str=str(price),
-                            quantity_placed_str=str(quantity_placed),
                             maker_pubkey=trader_pubkey,
                         )
                         response.append(open_order)
@@ -502,9 +496,6 @@ class PhoenixClient:
                             price=price,
                             quantity_remaining=quantity_remaining,
                             quantity_removed=quantity_removed,
-                            price_str=str(price),
-                            quantity_remaining_str=str(quantity_remaining),
-                            quantity_removed_str=str(quantity_removed),
                             maker_pubkey=trader_pubkey,
                         )
                         response.append(cancelled_order)
@@ -534,9 +525,6 @@ class PhoenixClient:
                             price=price,
                             quantity_remaining=quantity_remaining,
                             quantity_removed=quantity_removed,
-                            price_str=str(price),
-                            quantity_remaining_str=str(quantity_remaining),
-                            quantity_removed_str=str(quantity_removed),
                             maker_pubkey=trader_pubkey,
                         )
                         response.append(cancelled_order)
@@ -566,9 +554,6 @@ class PhoenixClient:
                             price=price,
                             quantity_remaining=quantity_remaining,
                             quantity_removed=quantity_removed,
-                            price_str=str(price),
-                            quantity_remaining_str=str(quantity_remaining),
-                            quantity_removed_str=str(quantity_removed),
                             maker_pubkey=trader_pubkey,
                         )
                         response.append(cancelled_order)
@@ -956,7 +941,6 @@ class PhoenixClient:
             order_ids = [
                 FIFOOrderId.from_int(o) if isinstance(o, int) else o for o in order_ids
             ]
-            print(order_ids)
             orders = [
                 CancelOrderParams(
                     side=Bid if (order_id.order_sequence_number & 1 << 63 > 0) else Ask,
@@ -1003,7 +987,7 @@ class PhoenixClient:
         market_pubkey: Pubkey,
         order_id: Union[FIFOOrderId, int],
         **kwargs,
-    ) -> Tuple[Signature, List[FIFOOrderId]]:
+    ) -> Tuple[Signature, List[int]]:
         return await self.cancel_orders(
             signer=signer, market_pubkey=market_pubkey, order_ids=[order_id], **kwargs
         )
@@ -1013,7 +997,7 @@ class PhoenixClient:
         signer: Keypair,
         market_pubkey: Pubkey,
         **kwargs,
-    ) -> Tuple[Signature, List[FIFOOrderId]]:
+    ) -> Tuple[Signature, List[int]]:
         return await self.cancel_orders(
             signer=signer, market_pubkey=market_pubkey, order_ids=None, **kwargs
         )
@@ -1028,7 +1012,7 @@ class PhoenixClient:
         commitment=None,
         tx_opts: TxOpts | None = None,
         recent_blockhash: Hash | None = None,
-    ) -> Tuple[Signature, List[FIFOOrderId]]:
+    ) -> Tuple[Signature, List[int]]:
         market_metadata = self.markets.get(market_pubkey, None)
         if market_metadata == None:
             raise ValueError("Market not found: ", market_pubkey)
@@ -1090,6 +1074,6 @@ class PhoenixClient:
                                 order_sequence_number=phoenix_event.value[
                                     0
                                 ].order_sequence_number,
-                            )
+                            ).to_int()
                         )
         return (signature, cancelled_orders)

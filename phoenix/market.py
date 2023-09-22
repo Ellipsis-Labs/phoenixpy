@@ -17,7 +17,6 @@ DEFAULT_L2_LADDER_DEPTH = 10
 
 @dataclass
 class ActiveOrder:
-    exchange_order_id: FIFOOrderId
     order_id: int
     market: Pubkey
     side: str
@@ -284,7 +283,6 @@ class Market:
         for order_id, resting_order in bid_orders:
             active_orders.append(
                 ActiveOrder(
-                    exchange_order_id=order_id,
                     order_id=order_id.to_int(),
                     market=self.address,
                     side="buy",
@@ -299,7 +297,6 @@ class Market:
         for order_id, resting_order in ask_orders:
             active_orders.append(
                 ActiveOrder(
-                    exchange_order_id=order_id,
                     order_id=order_id.to_int(),
                     market=self.address,
                     side="sell",

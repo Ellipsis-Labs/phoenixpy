@@ -19,9 +19,6 @@ class FilledOrder:
     price: Decimal
     quantity_filled: Decimal
     quantity_remaining: Decimal
-    price_str: str
-    quantity_filled_str: str
-    quantity_remaining_str: str
     taker_pubkey: Pubkey
     maker_pubkey: Pubkey
 
@@ -35,8 +32,6 @@ class OpenOrder:
     side: Union[Bid, Ask]
     price: Decimal
     quantity_placed: Decimal
-    price_str: str
-    quantity_placed_str: str
     unix_timestamp_in_seconds: int
     side: Union[Bid, Ask]
     maker_pubkey: Pubkey
@@ -53,9 +48,6 @@ class CancelledOrder:
     price: Decimal
     quantity_removed: Decimal
     quantity_remaining: Decimal
-    price_str: str
-    quantity_removed_str: str
-    quantity_remaining_str: str
     maker_pubkey: Pubkey
 
 

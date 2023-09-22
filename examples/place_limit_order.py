@@ -62,11 +62,7 @@ async def main():
     orders_to_cancel = list(
         map(lambda x: x.order_id, order_ids_map.client_orders_map.values())
     )
-    fifo_orders_to_cancel = list(
-        map(lambda x: x.exchange_order_id, order_ids_map.client_orders_map.values())
-    )
     print("Order IDs to cancel (numeric): ", orders_to_cancel)
-    print("Order IDs to cancel (structured): ", fifo_orders_to_cancel)
 
     print(
         "All orders",
