@@ -215,6 +215,8 @@ class PhoenixClient:
     ) -> Iterator[List[OrderSubscribeResponse]]:
         error_count = 0
         reconnection_count = 0
+        if market_pubkey not in self.markets:
+            await self.add_market(market_pubkey)
         while True:
             reconnection_count += 1
             async with connect(self.ws_endpoint) as websocket:
@@ -294,6 +296,8 @@ class PhoenixClient:
     ) -> Iterator[List[OrderSubscribeResponse]]:
         error_count = 0
         reconnection_count = 0
+        if market_pubkey not in self.markets:
+            await self.add_market(market_pubkey)
         while True:
             reconnection_count += 1
             async with websockets.connect(self.ws_endpoint + "/whirligig") as websocket:
@@ -405,6 +409,7 @@ class PhoenixClient:
     def __get_response_from_phoenix_transaction(
         self, phoenix_tx, market_pubkey, trader_pubkey
     ):
+        meta: MarketMetadata = self.markets[market_pubkey]
         response = []
         for event in phoenix_tx.events_from_instructions:
             header = event.header
@@ -428,6 +433,13 @@ class PhoenixClient:
                             taker_side=from_order_sequence_number(
                                 fill.order_sequence_number
                             ).opposite(),
+                            price=meta.ticks_to_float_price(fill.price_in_ticks),
+                            quantity_filled=meta.base_lots_to_raw_base_units_as_float(
+                                fill.base_lots_filled
+                            ),
+                            quantity_remaining=meta.base_lots_to_raw_base_units_as_float(
+                                fill.base_lots_remaining
+                            ),
                             base_lots_filled=fill.base_lots_filled,
                             base_lots_remaining=fill.base_lots_remaining,
                             taker_pubkey=header.signer,
@@ -451,6 +463,10 @@ class PhoenixClient:
                             side=from_order_sequence_number(
                                 place.order_sequence_number
                             ),
+                            price=meta.ticks_to_float_price(place.price_in_ticks),
+                            quantity_placed=meta.base_lots_to_raw_base_units_as_float(
+                                place.base_lots_placed
+                            ),
                             base_lots_placed=place.base_lots_placed,
                             maker_pubkey=trader_pubkey,
                         )
@@ -471,6 +487,13 @@ class PhoenixClient:
                             sequence_number=header.sequence_number,
                             side=from_order_sequence_number(
                                 reduce.order_sequence_number
+                            ),
+                            price=meta.ticks_to_float_price(reduce.price_in_ticks),
+                            quantity_remaining=meta.base_lots_to_raw_base_units_as_float(
+                                reduce.base_lots_remaining
+                            ),
+                            quantity_removed=meta.base_lots_to_raw_base_units_as_float(
+                                reduce.base_lots_removed
                             ),
                             base_lots_removed=reduce.base_lots_removed,
                             base_lots_remaining=reduce.base_lots_remaining,
@@ -494,6 +517,13 @@ class PhoenixClient:
                             side=from_order_sequence_number(
                                 expired.order_sequence_number
                             ),
+                            price=meta.ticks_to_float_price(expired.price_in_ticks),
+                            quantity_remaining=meta.base_lots_to_raw_base_units_as_float(
+                                expired.base_lots_remaining
+                            ),
+                            quantity_removed=meta.base_lots_to_raw_base_units_as_float(
+                                expired.base_lots_removed
+                            ),
                             base_lots_removed=expired.base_lots_removed,
                             base_lots_remaining=0,
                             maker_pubkey=trader_pubkey,
@@ -515,6 +545,13 @@ class PhoenixClient:
                             sequence_number=header.sequence_number,
                             side=from_order_sequence_number(
                                 evicted.order_sequence_number
+                            ),
+                            price=meta.ticks_to_float_price(evicted.price_in_ticks),
+                            quantity_remaining=meta.base_lots_to_raw_base_units_as_float(
+                                evicted.base_lots_remaining
+                            ),
+                            quantity_removed=meta.base_lots_to_raw_base_units_as_float(
+                                evicted.base_lots_removed
                             ),
                             base_lots_removed=evicted.base_lots_evicted,
                             base_lots_remaining=0,

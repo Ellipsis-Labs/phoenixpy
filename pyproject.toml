@@ -1,6 +1,6 @@
 [project]
 name = "phoenix-trade"
-version = "0.1.4"
+version = "0.1.6"
 authors = [
   { name="Ellipsis Labs", email="contributors@ellipsislabs.xyz" },
 ]
