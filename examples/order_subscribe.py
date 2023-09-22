@@ -30,7 +30,7 @@ async def main():
     client = PhoenixClient(
         endpoint=url,
     )
-    async for event_packet in client.order_subscribe(market, trader):
+    async for event_packet in client.order_subscribe(market, trader, "processed"):
         for event in event_packet:
             if isinstance(event, OpenOrder):
                 print("place", event)

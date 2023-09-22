@@ -2,6 +2,7 @@ import asyncio
 import os
 import json
 
+from solana.rpc.types import TxOpts
 import requests
 from phoenix.client import PhoenixClient
 from solders.pubkey import Pubkey
@@ -56,6 +57,7 @@ async def main():
     order_ids_map = await client.send_orders(
         signer,
         [limit_order_packet, limit_order_packet_two, limit_order_packet_three],
+        tx_opts=TxOpts(skip_preflight=True),
     )
     print("Order Id Map: ", order_ids_map)
 

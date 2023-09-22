@@ -291,7 +291,10 @@ class PhoenixClient:
                         error_count += 1
 
     async def order_subscribe(
-        self, market_pubkey: Pubkey, trader_pubkey: Pubkey
+        self,
+        market_pubkey: Pubkey,
+        trader_pubkey: Pubkey,
+        commitment: Commitment | None = None,
     ) -> Iterator[List[OrderSubscribeResponse]]:
         error_count = 0
         reconnection_count = 0
@@ -300,6 +303,7 @@ class PhoenixClient:
         while True:
             reconnection_count += 1
             async with websockets.connect(self.ws_endpoint + "/whirligig") as websocket:
+                commitment = commitment if commitment != None else self.commitment
                 try:
                     transaction_subscribe = request(
                         "transactionSubscribe",
@@ -310,7 +314,7 @@ class PhoenixClient:
                                 "vote": False,
                             },
                             {
-                                "commitment": "confirmed",
+                                "commitment": str(commitment),
                             },
                         ],
                     )
@@ -369,7 +373,8 @@ class PhoenixClient:
         payload = response["params"]["result"]["value"]
         meta = payload["meta"]
         loaded_addresses = meta.get("loadedAddresses", {"readonly": [], "writable": []})
-        message = payload["transaction"]["message"][-1]
+        tx_message = payload["transaction"]["message"]
+        message = tx_message[-1] if isinstance(tx_message, list) else tx_message
         base_account_keys = list(
             map(
                 lambda l: Pubkey.from_bytes(bytes(l)),
@@ -417,7 +422,7 @@ class PhoenixClient:
             for e in event.events:
                 if e.kind == "Fill":
                     fill = e.value[0]
-                    if fill.maker_id == trader_pubkey:
+                    if fill.maker_id == trader_pubkey or header.signer == trader_pubkey:
                         fifo_order_id = FIFOOrderId(
                             order_sequence_number=fill.order_sequence_number,
                             price_in_ticks=fill.price_in_ticks,
@@ -458,6 +463,7 @@ class PhoenixClient:
                         )
                         open_order = OpenOrder(
                             order_id=fifo_order_id.to_int(),
+                            client_order_id=place.client_order_id,
                             market_pubkey=market_pubkey,
                             slot=header.slot,
                             unix_timestamp_in_seconds=header.timestamp,
