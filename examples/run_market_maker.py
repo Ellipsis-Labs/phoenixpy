@@ -24,8 +24,15 @@ import time
 from phoenix.client import PhoenixClient
 from phoenix.market import Ladder, Market
 from phoenix.market_metadata import MarketMetadata
+from phoenix.order_subscribe_response import (
+    CancelledOrder,
+    FilledOrder,
+    OpenOrder,
+    OrderSubscribeError,
+)
 from phoenix.types.fifo_order_id import FIFOOrderId
 from phoenix.types.side import Ask, Bid
+from binance import AsyncClient, BinanceSocketManager
 
 BID_CLIENT_ORDER_ID = 0x0B
 ASK_CLIENT_ORDER_ID = 0x0A
@@ -52,7 +59,9 @@ class Bot:
         self.bids = []
         self.asks = []
 
+        self.usdc_usdt = 1.0
         self.coinbase_vwap = None
+        self.binance_vwap = None
         self.phoenix_best_bid = None
         self.phoenix_best_bid_size = None
         self.phoenix_best_ask = None
@@ -115,7 +124,7 @@ class Bot:
                     signature, "confirmed"
                 )
 
-    async def get_fair_price(self):
+    async def get_fair_price_from_coinbase(self):
         if not self.is_running:
             raise Exception("Bot not initialized")
         # Get price feed from Coinbase (SOL-USD)
@@ -157,6 +166,69 @@ class Bot:
                 except Exception as e:
                     print(e)
 
+    async def get_fair_price_from_binance(self):
+        client = await AsyncClient.create()
+
+        bm = BinanceSocketManager(client)
+        ts = bm.symbol_book_ticker_socket("SOLUSDT")
+        async with ts as tscm:
+            while self.is_running:
+                try:
+                    price_feed = await tscm.recv()
+                    best_bid = float(price_feed["b"])
+                    best_ask = float(price_feed["a"])
+                    best_bid_size = float(price_feed["B"])
+                    best_ask_size = float(price_feed["A"])
+                    self.binance_vwap = (
+                        (1 / self.usdc_usdt)
+                        * (best_bid * best_ask_size + best_ask * best_bid_size)
+                        / (best_bid_size + best_ask_size)
+                    )
+                    await self.update_quotes()
+                except:
+                    continue
+
+        await client.close_connection()
+
+    async def get_usdc_usdt_price(self):
+        client = await AsyncClient.create()
+        while self.is_running:
+            try:
+                data = await client.get_symbol_ticker(symbol="USDCUSDT")
+                usdc_usdt = float(data["price"])
+                if abs(1 - usdc_usdt) > 0.01:
+                    (signature, _) = await self.phoenix_client.cancel_orders(
+                        self.signer, market_pubkey=self.market, withdraw_free_funds=True
+                    )
+                    print(f"https://solscan.io/tx/{signature}")
+                    self.is_running = False
+                    print("Cancelled all orders and exiting program.")
+                self.usdc_usdt = usdc_usdt
+                await asyncio.sleep(2)
+            except:
+                await asyncio.sleep(2)
+
+    async def order_subscribe(self):
+        async for event_packet in self.phoenix_client.order_subscribe(
+            self.market, self.signer.pubkey(), "processed"
+        ):
+            for event in event_packet:
+                if isinstance(event, FilledOrder):
+                    print("Fill:", event.taker_side, event.price, event.quantity_filled)
+                if isinstance(event, OrderSubscribeError):
+                    print("Error", event)
+
+    async def order_subscribe_with_default_client(self):
+        async for event_packet in self.phoenix_client.order_subscribe_with_default_client(
+            self.market,
+            self.signer.pubkey(),
+        ):
+            for event in event_packet:
+                if isinstance(event, FilledOrder):
+                    print("Fill:", event.taker_side, event.price, event.quantity_filled)
+                if isinstance(event, OrderSubscribeError):
+                    print("Error", event)
+
     async def update_quotes(self, force=False, attempts=1):
         if attempts > 3:
             print("Failed to update quotes, attempted 3 times")
@@ -168,7 +240,11 @@ class Bot:
         starting_orders.extend(self.asks)
         starting_orders = [FIFOOrderId.from_int(i.order_id) for i in starting_orders]
 
-        fair = self.coinbase_vwap
+        fair = (
+            self.binance_vwap if self.binance_vwap is not None else self.coinbase_vwap
+        )
+        if fair is None:
+            return
         fair *= 1 + (self.offset_in_bps / 10000)
 
         if len(starting_orders) == 2:
@@ -180,8 +256,12 @@ class Bot:
             if not force and abs(fair - mid) <= edge * 0.25:
                 return
 
-        print("Coinbase fair price:", self.coinbase_vwap)
-        print("Our fair price:", fair)
+        print(
+            "Coinbase fair price:",
+            self.coinbase_vwap,
+            "Binance fair price:",
+            self.binance_vwap,
+        )
 
         bid_price = fair * (1 - (self.edge_in_basis_points / 10000))
         bid = self.phoenix_client.get_post_only_order_packet(
@@ -290,7 +370,14 @@ class Bot:
 
         self.__updating_quotes = False
 
+    async def hearbeat(self):
+        while self.is_running:
+            print("Heartbeat")
+            await asyncio.sleep(5)
+
     async def handle_l2_orderbook(self, book: Ladder):
+        if not self.is_running:
+            return
         if len(book.bids) == 0:
             self.phoenix_best_bid = None
             self.phoenix_best_bid_size = None
@@ -305,6 +392,8 @@ class Bot:
             self.phoenix_best_ask_size = book.asks[0].size
 
     async def handle_market(self, market: Market):
+        if not self.is_running:
+            return
         if market.sequence_number <= self.sequence_number:
             return
         self.market_snapshot = market
@@ -331,16 +420,6 @@ class Bot:
                     break
             if not found_bid:
                 self.bids = []
-                print(
-                    (
-                        market.sequence_number,
-                        "SELL",
-                        self.metadata.ticks_to_float_price(bid_order_id.price_in_ticks),
-                        self.metadata.base_lots_to_raw_base_units_as_float(
-                            bid.base_lots_remaining
-                        ),
-                    )
-                )
         else:
             found_bid = True
         if len(self.asks) > 0:
@@ -354,16 +433,6 @@ class Bot:
                     break
             if not found_ask:
                 self.asks = []
-                print(
-                    (
-                        market.sequence_number,
-                        "BUY",
-                        self.metadata.ticks_to_float_price(ask_order_id.price_in_ticks),
-                        self.metadata.base_lots_to_raw_base_units_as_float(
-                            ask.base_lots_remaining
-                        ),
-                    )
-                )
         else:
             found_ask = True
 
@@ -425,7 +494,6 @@ class Bot:
                     print(f"https://solscan.io/tx/{signature}")
                     self.is_running = False
                     print("Cancelled all orders and exiting program.")
-                    exit(0)
                 elif ch == b"v":
                     # Print trader info
                     if self.market_snapshot is None:
@@ -576,6 +644,22 @@ async def main():
         default=5,
     )
 
+    # Allow user to specify quote size in $
+    parser.add_argument(
+        "-q",
+        "--quote-size",
+        type=int,
+        help="Quote size in $",
+        default=20,
+    )
+    # Allow user to pass in `use_binance`
+    parser.add_argument(
+        "--use-binance",
+        action="store_true",
+        help="Use Binance instead of Coinbase",
+        default=False,
+    )
+
     args = parser.parse_args()
 
     if args.keypair is not None:
@@ -598,15 +682,29 @@ async def main():
         client,
         Pubkey.from_string("4DoNfFBfF7UokCC2FQzriy7yHK6DY6NVdYpuekQ5pRgg"),
         edge_in_basis_points=args.edge,
+        quote_size=args.quote_size,
     )
     await bot.initialize()
     print("Press 'h' to see help message")
-    await asyncio.gather(
-        bot.get_fair_price(),
-        bot.l2_book_subscribe(),
-        bot.market_subscribe(),
-        bot.offset_subscribe(),
-    )
+    if args.use_binance:
+        await asyncio.gather(
+            bot.get_usdc_usdt_price(),
+            bot.get_fair_price_from_binance(),
+            bot.l2_book_subscribe(),
+            bot.market_subscribe(),
+            bot.hearbeat(),
+            bot.offset_subscribe(),
+            bot.order_subscribe(),
+        )
+    else:
+        await asyncio.gather(
+            bot.get_fair_price_from_coinbase(),
+            bot.l2_book_subscribe(),
+            bot.market_subscribe(),
+            bot.hearbeat(),
+            bot.offset_subscribe(),
+            bot.order_subscribe(),
+        )
 
 
 asyncio.run(main())
