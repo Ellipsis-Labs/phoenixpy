@@ -513,9 +513,7 @@ class PhoenixClient:
                             price_in_ticks=expired.price_in_ticks,
                         )
                         price = meta.ticks_to_float_price(expired.price_in_ticks)
-                        quantity_remaining = meta.base_lots_to_raw_base_units_as_float(
-                            expired.base_lots_remaining
-                        )
+                        quantity_remaining = 0
                         quantity_removed = meta.base_lots_to_raw_base_units_as_float(
                             expired.base_lots_removed
                         )
@@ -542,9 +540,7 @@ class PhoenixClient:
                             price_in_ticks=evicted.price_in_ticks,
                         )
                         price = meta.ticks_to_float_price(evicted.price_in_ticks)
-                        quantity_remaining = meta.base_lots_to_raw_base_units_as_float(
-                            evicted.base_lots_remaining
-                        )
+                        quantity_remaining = 0
                         quantity_removed = meta.base_lots_to_raw_base_units_as_float(
                             evicted.base_lots_removed
                         )
