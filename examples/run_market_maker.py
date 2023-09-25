@@ -24,6 +24,7 @@ import time
 from phoenix.client import PhoenixClient
 from phoenix.market import Ladder, Market
 from phoenix.market_metadata import MarketMetadata
+from phoenix.types.fifo_order_id import FIFOOrderId
 from phoenix.types.side import Ask, Bid
 
 BID_CLIENT_ORDER_ID = 0x0B
@@ -91,7 +92,7 @@ class Bot:
             )
             print("ATA balance:", balance.value)
 
-            if balance.value < 1e9:
+            if balance.value < 2e9:
                 transaction = Transaction()
                 # Top up the WSOL account with SOL and keep 1 SOL for gas
                 print(int(wallet_balance - 1e9))
@@ -127,7 +128,10 @@ class Bot:
                         "product_ids": [
                             "SOL-USD",
                         ],
-                        "channels": ["heartbeat", {"name": "ticker", "product_ids": ["SOL-USD"]}],
+                        "channels": [
+                            "heartbeat",
+                            {"name": "ticker", "product_ids": ["SOL-USD"]},
+                        ],
                     }
                 )
             )
@@ -162,17 +166,14 @@ class Bot:
         starting_orders = []
         starting_orders.extend(self.bids)
         starting_orders.extend(self.asks)
+        starting_orders = [FIFOOrderId.from_int(i.order_id) for i in starting_orders]
 
         fair = self.coinbase_vwap
         fair *= 1 + (self.offset_in_bps / 10000)
 
         if len(starting_orders) == 2:
-            bid = self.metadata.ticks_to_float_price(
-                starting_orders[0].order_id.price_in_ticks
-            )
-            ask = self.metadata.ticks_to_float_price(
-                starting_orders[1].order_id.price_in_ticks
-            )
+            bid = self.metadata.ticks_to_float_price(starting_orders[0].price_in_ticks)
+            ask = self.metadata.ticks_to_float_price(starting_orders[1].price_in_ticks)
             mid = (bid + ask) / 2
             edge = mid * (self.edge_in_basis_points / 10000)
 
@@ -262,7 +263,7 @@ class Bot:
         placed_bid_size = None
         if len(self.bids) > 0:
             placed_bid_price = self.metadata.ticks_to_float_price(
-                self.bids[0].order_id.price_in_ticks
+                FIFOOrderId.from_int(self.bids[0].order_id).price_in_ticks
             )
             placed_bid_size = self.metadata.base_lots_to_raw_base_units_as_float(
                 self.bids[0].base_lots_remaining
@@ -272,7 +273,7 @@ class Bot:
         placed_ask_size = None
         if len(self.asks) > 0:
             placed_ask_price = self.metadata.ticks_to_float_price(
-                self.asks[0].order_id.price_in_ticks
+                FIFOOrderId.from_int(self.asks[0].order_id).price_in_ticks
             )
             placed_ask_size = self.metadata.base_lots_to_raw_base_units_as_float(
                 self.asks[0].base_lots_remaining
@@ -321,10 +322,11 @@ class Bot:
         bid = None
         if len(self.bids) > 0:
             bid = self.bids[0]
+            bid_order_id = FIFOOrderId.from_int(bid.order_id)
             for order in market.bids:
                 if order[1].trader_index != trader_index:
                     continue
-                if order[0].order_sequence_number == bid.order_id.order_sequence_number:
+                if order[0].order_sequence_number == bid_order_id.order_sequence_number:
                     found_bid = True
                     break
             if not found_bid:
@@ -333,7 +335,7 @@ class Bot:
                     (
                         market.sequence_number,
                         "SELL",
-                        self.metadata.ticks_to_float_price(bid.order_id.price_in_ticks),
+                        self.metadata.ticks_to_float_price(bid_order_id.price_in_ticks),
                         self.metadata.base_lots_to_raw_base_units_as_float(
                             bid.base_lots_remaining
                         ),
@@ -343,10 +345,11 @@ class Bot:
             found_bid = True
         if len(self.asks) > 0:
             ask = self.asks[0]
+            ask_order_id = FIFOOrderId.from_int(ask.order_id)
             for order in market.asks:
                 if order[1].trader_index != trader_index:
                     continue
-                if order[0].order_sequence_number == ask.order_id.order_sequence_number:
+                if order[0].order_sequence_number == ask_order_id.order_sequence_number:
                     found_ask = True
                     break
             if not found_ask:
@@ -355,7 +358,7 @@ class Bot:
                     (
                         market.sequence_number,
                         "BUY",
-                        self.metadata.ticks_to_float_price(ask.order_id.price_in_ticks),
+                        self.metadata.ticks_to_float_price(ask_order_id.price_in_ticks),
                         self.metadata.base_lots_to_raw_base_units_as_float(
                             ask.base_lots_remaining
                         ),
