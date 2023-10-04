@@ -21,6 +21,8 @@ class FilledOrder:
     quantity_remaining: Decimal
     taker_pubkey: Pubkey
     maker_pubkey: Pubkey
+    taker_client_order_id: int
+    taker_fee_paid: Decimal
 
 
 @dataclass

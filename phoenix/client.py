@@ -89,10 +89,13 @@ class ExecutableOrder:
 class PhoenixOrder:
     def __init__(
         self,
-        exchange_order_id: FIFOOrderId,
+        exchange_order_id: FIFOOrderId | int,
         base_lots_remaining: int,
     ):
-        self.order_id = exchange_order_id.to_int()
+        if isinstance(exchange_order_id, FIFOOrderId):
+            self.order_id = exchange_order_id.to_int()
+        else:
+            self.order_id = exchange_order_id
         self.base_lots_remaining = base_lots_remaining
 
     def __repr__(self):
@@ -103,9 +106,10 @@ class PhoenixResponse:
     def __init__(
         self,
         signature: Signature,
-        sequence_number: int,
+        sequence_number: int | None,
         client_orders_map: Dict[int, PhoenixOrder],
         cancelled_orders: List[PhoenixOrder] = None,
+        fills: List[FilledOrder] = None,
     ):
         self.signature = signature
         self.sequence_number = sequence_number
@@ -114,6 +118,17 @@ class PhoenixResponse:
             self.cancelled_orders = []
         else:
             self.cancelled_orders = cancelled_orders
+        if fills is None:
+            self.fills = []
+        else:
+            self.fills = fills
+
+    @property
+    def skipped(self):
+        return self.sequence_number is None
+
+    def __repr__(self) -> str:
+        return f"PhoenixResponse(signature={self.signature}, sequence_number={self.sequence_number}, client_orders_map={self.client_orders_map}, cancelled_orders={self.cancelled_orders}, fills={self.fills})"
 
 
 class PhoenixClient:
@@ -421,18 +436,21 @@ class PhoenixClient:
                 continue
             for e in event.events:
                 if e.kind == "Fill":
-                    fill = e.value[0]
-                    if fill.maker_id == trader_pubkey or header.signer == trader_pubkey:
+                    event_value = e.value[0]
+                    if (
+                        event_value.maker_id == trader_pubkey
+                        or header.signer == trader_pubkey
+                    ):
                         fifo_order_id = FIFOOrderId(
-                            order_sequence_number=fill.order_sequence_number,
-                            price_in_ticks=fill.price_in_ticks,
+                            order_sequence_number=event_value.order_sequence_number,
+                            price_in_ticks=event_value.price_in_ticks,
                         )
-                        price = meta.ticks_to_float_price(fill.price_in_ticks)
+                        price = meta.ticks_to_float_price(event_value.price_in_ticks)
                         quantity_filled = meta.base_lots_to_raw_base_units_as_float(
-                            fill.base_lots_filled
+                            event_value.base_lots_filled
                         )
                         quantity_remaining = meta.base_lots_to_raw_base_units_as_float(
-                            fill.base_lots_remaining
+                            event_value.base_lots_remaining
                         )
                         filled_order = FilledOrder(
                             order_id=fifo_order_id.to_int(),
@@ -441,35 +459,37 @@ class PhoenixClient:
                             unix_timestamp_in_seconds=header.timestamp,
                             sequence_number=header.sequence_number,
                             taker_side=from_order_sequence_number(
-                                fill.order_sequence_number
+                                event_value.order_sequence_number
                             ).opposite(),
                             price=price,
                             quantity_filled=quantity_filled,
                             quantity_remaining=quantity_remaining,
                             taker_pubkey=header.signer,
-                            maker_pubkey=fill.maker_id,
+                            maker_pubkey=event_value.maker_id,
+                            taker_client_order_id=-1,
+                            taker_fee_paid=0.0,
                         )
                         response.append(filled_order)
                 elif e.kind == "Place":
-                    place = e.value[0]
+                    event_value = e.value[0]
                     if header.signer == trader_pubkey:
                         fifo_order_id = FIFOOrderId(
-                            order_sequence_number=place.order_sequence_number,
-                            price_in_ticks=place.price_in_ticks,
+                            order_sequence_number=event_value.order_sequence_number,
+                            price_in_ticks=event_value.price_in_ticks,
                         )
-                        price = meta.ticks_to_float_price(place.price_in_ticks)
+                        price = meta.ticks_to_float_price(event_value.price_in_ticks)
                         quantity_placed = meta.base_lots_to_raw_base_units_as_float(
-                            place.base_lots_placed
+                            event_value.base_lots_placed
                         )
                         open_order = OpenOrder(
                             order_id=fifo_order_id.to_int(),
-                            client_order_id=place.client_order_id,
+                            client_order_id=event_value.client_order_id,
                             market_pubkey=market_pubkey,
                             slot=header.slot,
                             unix_timestamp_in_seconds=header.timestamp,
                             sequence_number=header.sequence_number,
                             side=from_order_sequence_number(
-                                place.order_sequence_number
+                                event_value.order_sequence_number
                             ),
                             price=price,
                             quantity_placed=quantity_placed,
@@ -477,18 +497,18 @@ class PhoenixClient:
                         )
                         response.append(open_order)
                 elif e.kind == "Reduce":
-                    reduce = e.value[0]
+                    event_value = e.value[0]
                     if header.signer == trader_pubkey:
                         fifo_order_id = FIFOOrderId(
-                            order_sequence_number=reduce.order_sequence_number,
-                            price_in_ticks=reduce.price_in_ticks,
+                            order_sequence_number=event_value.order_sequence_number,
+                            price_in_ticks=event_value.price_in_ticks,
                         )
-                        price = meta.ticks_to_float_price(reduce.price_in_ticks)
+                        price = meta.ticks_to_float_price(event_value.price_in_ticks)
                         quantity_remaining = meta.base_lots_to_raw_base_units_as_float(
-                            reduce.base_lots_remaining
+                            event_value.base_lots_remaining
                         )
                         quantity_removed = meta.base_lots_to_raw_base_units_as_float(
-                            reduce.base_lots_removed
+                            event_value.base_lots_removed
                         )
                         cancelled_order = CancelledOrder(
                             order_id=fifo_order_id.to_int(),
@@ -497,7 +517,7 @@ class PhoenixClient:
                             unix_timestamp_in_seconds=header.timestamp,
                             sequence_number=header.sequence_number,
                             side=from_order_sequence_number(
-                                reduce.order_sequence_number
+                                event_value.order_sequence_number
                             ),
                             price=price,
                             quantity_remaining=quantity_remaining,
@@ -506,16 +526,16 @@ class PhoenixClient:
                         )
                         response.append(cancelled_order)
                 elif e.kind == "ExpiredOrder":
-                    expired = e.value[0]
+                    event_value = e.value[0]
                     if header.signer == trader_pubkey:
                         fifo_order_id = FIFOOrderId(
-                            order_sequence_number=expired.order_sequence_number,
-                            price_in_ticks=expired.price_in_ticks,
+                            order_sequence_number=event_value.order_sequence_number,
+                            price_in_ticks=event_value.price_in_ticks,
                         )
-                        price = meta.ticks_to_float_price(expired.price_in_ticks)
+                        price = meta.ticks_to_float_price(event_value.price_in_ticks)
                         quantity_remaining = 0
                         quantity_removed = meta.base_lots_to_raw_base_units_as_float(
-                            expired.base_lots_removed
+                            event_value.base_lots_removed
                         )
                         cancelled_order = CancelledOrder(
                             order_id=fifo_order_id.to_int(),
@@ -524,7 +544,7 @@ class PhoenixClient:
                             unix_timestamp_in_seconds=header.timestamp,
                             sequence_number=header.sequence_number,
                             side=from_order_sequence_number(
-                                expired.order_sequence_number
+                                event_value.order_sequence_number
                             ),
                             price=price,
                             quantity_remaining=quantity_remaining,
@@ -533,16 +553,16 @@ class PhoenixClient:
                         )
                         response.append(cancelled_order)
                 elif e.kind == "Evict":
-                    evicted = e.value[0]
+                    event_value = e.value[0]
                     if header.signer == trader_pubkey:
                         fifo_order_id = FIFOOrderId(
-                            order_sequence_number=evicted.order_sequence_number,
-                            price_in_ticks=evicted.price_in_ticks,
+                            order_sequence_number=event_value.order_sequence_number,
+                            price_in_ticks=event_value.price_in_ticks,
                         )
-                        price = meta.ticks_to_float_price(evicted.price_in_ticks)
+                        price = meta.ticks_to_float_price(event_value.price_in_ticks)
                         quantity_remaining = 0
                         quantity_removed = meta.base_lots_to_raw_base_units_as_float(
-                            evicted.base_lots_removed
+                            event_value.base_lots_removed
                         )
                         cancelled_order = CancelledOrder(
                             order_id=fifo_order_id.to_int(),
@@ -551,7 +571,7 @@ class PhoenixClient:
                             unix_timestamp_in_seconds=header.timestamp,
                             sequence_number=header.sequence_number,
                             side=from_order_sequence_number(
-                                evicted.order_sequence_number
+                                event_value.order_sequence_number
                             ),
                             price=price,
                             quantity_remaining=quantity_remaining,
@@ -559,6 +579,31 @@ class PhoenixClient:
                             maker_pubkey=trader_pubkey,
                         )
                         response.append(cancelled_order)
+                elif e.kind == "FillSummary":
+                    event_value = e.value[0]
+                    fees_paid = meta.quote_lots_to_quote_units(
+                        event_value.total_fee_in_quote_lots
+                    )
+                    total_quanitty_filled = meta.base_lots_to_raw_base_units_as_float(
+                        event_value.total_base_lots_filled
+                    )
+                    client_order_id = event_value.client_order_id
+                    if total_quanitty_filled > 0:
+                        for fill_event in reversed(response):
+                            if isinstance(fill_event, FilledOrder):
+                                if fill_event.sequence_number != header.sequence_number:
+                                    break
+                                fill_event.taker_client_order_id = client_order_id
+                                fill_event.taker_fee_paid = round(
+                                    fees_paid
+                                    * (
+                                        fill_event.quantity_filled
+                                        / total_quanitty_filled
+                                    ),
+                                    meta.quote_decimals,
+                                )
+                            else:
+                                break
         return response
 
     async def market_subscribe(
@@ -810,6 +855,7 @@ class PhoenixClient:
         order_packets: List[ExecutableOrder],
         pre_instructions: [Instruction] = None,
         post_instructions: [Instruction] = None,
+        skip_response: bool = False,
         commitment=None,
         tx_opts: TxOpts | None = None,
         recent_blockhash: Hash | None = None,
@@ -847,18 +893,31 @@ class PhoenixClient:
                 transaction.add(instruction)
 
         # Send transaction
-        response = await self.client.send_transaction(
-            transaction, signer, opts=tx_opts, recent_blockhash=recent_blockhash
-        )
-        signature = response.value
+        try:
+            response = await self.client.send_transaction(
+                transaction, signer, opts=tx_opts, recent_blockhash=recent_blockhash
+            )
+            signature = response.value
+        except:
+            print("Failed to send transaction")
+            return None
+
+        # In the case where we don't want to wait for a response, we return a response with no data
+        if skip_response:
+            return PhoenixResponse(
+                signature=signature, sequence_number=None, client_orders_map={}
+            )
+
         # Get transaction and parse for the FIFOOrderId of each order
         commitment = commitment if commitment is not None else self.commitment
+        transaction = None
         await self.client.confirm_transaction(signature, commitment)
         transaction_response = await self.client.get_transaction(
             signature, "json", commitment, 0
         )
 
         transaction = transaction_response.value
+
         if transaction is None:
             print("Failed to confirm transaction: ", signature)
             return None
@@ -866,12 +925,50 @@ class PhoenixClient:
         phoenix_transaction = get_phoenix_events_from_confirmed_transaction_with_meta(
             transaction
         )
+
         cancelled_orders = []
+        fills = []
         sequence_number = -1
         for ix_events in phoenix_transaction.events_from_instructions:
-            sequence_number = ix_events.header.sequence_number
+            header = ix_events.header
+            sequence_number = header.sequence_number
+            current_market = header.market
+            if current_market not in self.markets:
+                await self.add_market(market_pubkey)
+            meta = self.markets[current_market]
             for phoenix_event in ix_events.events:
-                if phoenix_event.kind == "Place":
+                if phoenix_event.kind == "Fill":
+                    event_value = phoenix_event.value[0]
+                    fifo_order_id = FIFOOrderId(
+                        order_sequence_number=event_value.order_sequence_number,
+                        price_in_ticks=event_value.price_in_ticks,
+                    )
+                    price = meta.ticks_to_float_price(event_value.price_in_ticks)
+                    quantity_filled = meta.base_lots_to_raw_base_units_as_float(
+                        event_value.base_lots_filled
+                    )
+                    quantity_remaining = meta.base_lots_to_raw_base_units_as_float(
+                        event_value.base_lots_remaining
+                    )
+                    filled_order = FilledOrder(
+                        order_id=fifo_order_id.to_int(),
+                        market_pubkey=market_pubkey,
+                        slot=header.slot,
+                        unix_timestamp_in_seconds=header.timestamp,
+                        sequence_number=header.sequence_number,
+                        taker_side=from_order_sequence_number(
+                            event_value.order_sequence_number
+                        ).opposite(),
+                        price=price,
+                        quantity_filled=quantity_filled,
+                        quantity_remaining=quantity_remaining,
+                        taker_pubkey=header.signer,
+                        maker_pubkey=event_value.maker_id,
+                        taker_client_order_id=-1,
+                        taker_fee_paid=0.0,
+                    )
+                    fills.append(filled_order)
+                elif phoenix_event.kind == "Place":
                     client_orders_map[
                         phoenix_event.value[0].client_order_id
                     ] = PhoenixOrder(
@@ -881,7 +978,7 @@ class PhoenixClient:
                         ),
                         phoenix_event.value[0].base_lots_placed,
                     )
-                if phoenix_event.kind == "Reduce":
+                elif phoenix_event.kind == "Reduce":
                     cancelled_orders.append(
                         PhoenixOrder(
                             FIFOOrderId(
@@ -893,6 +990,25 @@ class PhoenixClient:
                             phoenix_event.value[0].base_lots_remaining,
                         )
                     )
+                elif phoenix_event.kind == "FillSummary":
+                    event_value = phoenix_event.value[0]
+                    fees_paid = meta.quote_lots_to_quote_units(
+                        event_value.total_fee_in_quote_lots
+                    )
+                    total_quanitty_filled = meta.base_lots_to_raw_base_units_as_float(
+                        event_value.total_base_lots_filled
+                    )
+                    client_order_id = event_value.client_order_id
+                    if total_quanitty_filled > 0:
+                        for fill_event in reversed(fills):
+                            if fill_event.sequence_number != header.sequence_number:
+                                break
+                            fill_event.taker_client_order_id = client_order_id
+                            fill_event.taker_fee_paid = round(
+                                fees_paid
+                                * (fill_event.quantity_filled / total_quanitty_filled),
+                                meta.quote_decimals,
+                            )
         return PhoenixResponse(
             signature=signature,
             # We add 1 because the sequence number is the sequence number of the last event in the transaction
@@ -900,6 +1016,7 @@ class PhoenixClient:
             sequence_number=sequence_number + 1,
             client_orders_map=client_orders_map,
             cancelled_orders=cancelled_orders,
+            fills=fills,
         )
 
     def create_cancel_order_instruction(
