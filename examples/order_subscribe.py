@@ -14,6 +14,7 @@ from phoenix.order_subscribe_response import (
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-t", "--trader", type=str, help="Trader base58 string")
+    parser.add_argument("--only-fills", default=False, action="store_true")
     parser.add_argument(
         "-u",
         "--url",
@@ -32,11 +33,11 @@ async def main():
     )
     async for event_packet in client.order_subscribe(market, trader, "processed"):
         for event in event_packet:
-            if isinstance(event, OpenOrder):
+            if isinstance(event, OpenOrder) and not args.only_fills:
                 print("place", event)
             if isinstance(event, FilledOrder):
                 print("fill", event)
-            if isinstance(event, CancelledOrder):
+            if isinstance(event, CancelledOrder) and not args.only_fills:
                 print("cancel", event)
             if isinstance(event, OrderSubscribeError):
                 print("error", event)
