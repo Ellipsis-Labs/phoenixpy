@@ -127,6 +127,9 @@ class PhoenixResponse:
     def skipped(self):
         return self.sequence_number is None
 
+    def __repr__(self) -> str:
+        return f"PhoenixResponse(signature={self.signature}, sequence_number={self.sequence_number}, client_orders_map={self.client_orders_map}, cancelled_orders={self.cancelled_orders}, fills={self.fills})"
+
 
 class PhoenixClient:
     def __init__(
