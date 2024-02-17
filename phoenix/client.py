@@ -2,6 +2,7 @@ import asyncio
 import traceback
 from dataclasses import dataclass
 import base58
+import base64
 import json
 from typing import Any, Callable, Dict, Iterator, Tuple, TypedDict, Union, List
 from uuid import uuid4
@@ -63,6 +64,8 @@ from phoenix.events import (
 from solana.rpc.commitment import Commitment
 from solana.rpc.async_api import AsyncClient
 from solana.rpc.types import TxOpts
+from solders.transaction import Transaction as SoldersTransaction
+from solders.transaction import VersionedTransaction as SoldersVersionedTransaction
 from solders.pubkey import Pubkey
 from solders.hash import Hash
 from solders.signature import Signature
@@ -324,12 +327,16 @@ class PhoenixClient:
                         "transactionSubscribe",
                         params=[
                             {
-                                "mentions": [str(market_pubkey)],
+                                "accounts":
+                                {
+                                    "include": [str(market_pubkey)]
+                                },
                                 "failed": False,
                                 "vote": False,
                             },
                             {
                                 "commitment": str(commitment),
+                                "maxSupportedTransactionVersion": 1,
                             },
                         ],
                     )
@@ -385,15 +392,26 @@ class PhoenixClient:
     def __process_transaction_event(
         self, response, market_pubkey: Pubkey, trader_pubkey: Pubkey
     ) -> [OrderSubscribeResponse]:
-        payload = response["params"]["result"]["value"]
+        if "error" in response["params"]["result"]["value"]:
+            error = response["params"]["result"]["value"]["error"]
+            print("Order subscription returned an error %s", error)
+            return []
+        
+        payload = response["params"]["result"]["value"]["transaction"]
         meta = payload["meta"]
         loaded_addresses = meta.get("loadedAddresses", {"readonly": [], "writable": []})
-        tx_message = payload["transaction"]["message"]
-        message = tx_message[-1] if isinstance(tx_message, list) else tx_message
+        version = payload["version"]
+
+        if version == "legacy":
+            tx = SoldersTransaction.from_bytes(base64.b64decode(payload["transaction"][0]))
+        else:
+            tx = SoldersVersionedTransaction.from_bytes(base64.b64decode(payload["transaction"][0]))
+
+        message = tx.message
         base_account_keys = list(
             map(
                 lambda l: Pubkey.from_bytes(bytes(l)),
-                message["accountKeys"][1:],
+                message.account_keys,
             )
         )
         lookup_table_keys = list(
@@ -417,7 +435,7 @@ class PhoenixClient:
 
         phoenix_tx = PhoenixTransaction(
             instructions,
-            signature=Signature.from_bytes(payload["transaction"]["signatures"][1]),
+            signature=tx.signatures[0],
             txReceived=True,
             txFailed=False,
         )
