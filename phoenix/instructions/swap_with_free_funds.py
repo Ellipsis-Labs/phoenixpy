@@ -41,7 +41,7 @@ def swap_with_free_funds(
     ]
     if remaining_accounts is not None:
         keys += remaining_accounts
-    identifier = b"\x02"
+    identifier = b"\x01"
     encoded_args = layout.build(
         {
             "order_packet": args["order_packet"].to_encodable(),
